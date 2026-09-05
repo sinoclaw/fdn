@@ -17,7 +17,8 @@ class FDN(nn.Module):
     def __init__(self, dim=4, hidden=32, r=16, initial_nodes=12,
                  base_k=5, kmin=3, kmax=8, ent_scale=1.0,
                  memory_max=256, plastic_lr=1e-3, plastic_cap=0.1, plastic_decay=0.98,
-                 use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True):
+                 use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
+                 warmup_steps=0, warm_temp=3.0):
         super().__init__()
         self.dim, self.hidden, self.r = dim, hidden, r
         self.base_k, self.kmin, self.kmax, self.ent_scale = base_k, kmin, kmax, ent_scale
@@ -26,6 +27,12 @@ class FDN(nn.Module):
         self.use_memory = use_memory
         self.dynamic_tau = dynamic_tau
         self.dynamic_k = dynamic_k
+        # Router warm-up + soft→hard curriculum（破「路由鸡生蛋」）
+        # warmup_steps>0 时：前 warmup_steps 次训练前向用「全班 soft 路由」（温度从 warm_temp 指数退火到近似 hard），
+        # 让每个 Node 都拿到梯度、Router 学到任务亲和；达到 warmup_steps 后切回 hard top-k。
+        self.warmup_steps = warmup_steps
+        self.warm_temp = warm_temp
+        self.step = 0
 
         self.q = nn.Linear(dim, r)                 # 任务查询向量
         self.nodes = nn.ModuleList()               # 动态 Node 列表（可 spawn 生长）
@@ -87,11 +94,23 @@ class FDN(nn.Module):
         if self.archived:                                          # 屏蔽已归档 Node
             arch_idx = list(self.archived)
             scores[:, arch_idx] = -1e9
-        k = self._dynamic_k(x, scores) if self.dynamic_k else self.base_k
 
-        top = torch.topk(scores, k, dim=-1)                       # (B,k)
-        idx = top.indices                                          # (B,k)
-        gate = torch.softmax(top.values, dim=-1)                   # (B,k)
+        # —— Router warm-up + soft→hard curriculum ——
+        in_warmup = self.warmup_steps > 0 and self.training and self.step < self.warmup_steps
+        if in_warmup:
+            # 全班 soft 路由：温度自 warm_temp 指数退火到接近 hard（step 越大越陡）
+            frac = self.step / max(1, self.warmup_steps)
+            temp = self.warm_temp * (1.0 - frac) + 1e-2 * frac
+            p_full = torch.softmax(scores / temp, dim=-1)          # (B,n) 全班权重，梯度通往每个 Node & Router
+            top = torch.topk(scores, scores.size(-1), dim=-1)      # 仍取全班（= n）
+            idx = top.indices
+            gate_all = torch.gather(p_full, dim=-1, index=idx)     # 按 idx 排序的 gate（保梯度）
+            gate = gate_all
+        else:
+            k = self._dynamic_k(x, scores) if self.dynamic_k else self.base_k
+            top = torch.topk(scores, min(k, scores.size(-1)), dim=-1)   # (B,k)
+            idx = top.indices                                          # (B,k)
+            gate = torch.softmax(top.values, dim=-1)                   # (B,k)
 
         out_list = []
         mem_ret = self.memory.retrieve(q.detach()) if self.use_memory else torch.zeros(x.shape[0], 1)
@@ -116,9 +135,19 @@ class FDN(nn.Module):
         out = torch.stack(out_list)                                 # (B,1) 含梯度
         if self.use_memory:
             out = out + 0.1 * mem_ret.detach()
-        info = {"idx": idx.cpu().numpy(), "k": k, "n": len(self.nodes),
+        info = {"idx": idx.cpu().numpy(), "k": (scores.size(-1) if in_warmup else k),
+                "n": len(self.nodes), "warmup": in_warmup,
                 "mem_keys": self.memory.size}
+        if self.training:
+            self.step += 1
         return out, info
+
+    def set_step(self, step):
+        """由训练循环注入当前全局步数（用于 warm 阶段退火阈值判断）。"""
+        self.step = int(step)
+
+    def reset_step(self):
+        self.step = 0
 
     def _plastic_update(self, ni, h, out_vec, target, scale):
         """推理期有界 ΔW：plastic += η·scale·(h·sign(err))，再衰减+裁剪。"""

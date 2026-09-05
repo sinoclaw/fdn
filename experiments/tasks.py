@@ -78,5 +78,13 @@ TASKS = {
 CORE_SEQUENCE = ["A_add", "B_mul", "C_logic", "A2_add"]
 LONG_SEQUENCE = ["A_add", "B_mul", "C_logic", "A2_add", "D_seq", "B_mul"]
 
+# GPT 强调的「递进保留曲线」：三段独立跑，测 A 在越来越长的任务链后的保留/调用
+# 注意：A2_add 是 A' 变体（规则未变、分布平移），用来测「调用非重学」
+RETENTION_SEQUENCES = {
+    "AA":   ["A_add", "A2_add"],
+    "ABA":  ["A_add", "B_mul", "A2_add"],
+    "ABCA": ["A_add", "B_mul", "C_logic", "A2_add"],
+}
+
 # 各任务用来算精度的容差
 TOL = 0.08

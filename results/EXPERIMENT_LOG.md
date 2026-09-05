@@ -96,4 +96,86 @@
 ### 下一步待议（交 GPT）
 "能学会"的承重机制（memory/plasticity/τ/k）与该机制"学会怎么做"的区分，是 v0.1 给出的新问题：最小组合学不动，说明隔离法需改为"保留承重动态、只关非承重的结构/路由变量"，或以更难/更稳任务重测。
 
+## 2026-09-06 GPT v0.1 复审 + FDN-v0.2 重新规划
+
+### GPT 复审结论（docs/GPT_AUDIT_V01_REVIEW.md，链接 t_6a9c75...）
+GPT 对 v0.1（cbafad0）复审，与团队判断一致且更精准：
+- **v0.1 结构稳定化成功**（merge 42→0、节点15），但**隔离实验把承重动态也关掉了**（acc 仍 0.045）。
+- **单任务全动态 A_add=0.598** 是铁证：memory/plasticity/τ/动态k 是「能学会」的承重机制。
+- **真正问题 = Dynamic Routing 鸡生蛋**：Router 冷启动不知谁擅长 A → 随机分配 → Node 信号不足 → 学不好 → Router 更不知所措。**是优化问题，非结构/机制缺失。**
+- 建议 v0.2：**保留承重动态、只隔离结构/路由变量** + **Router warm-up + soft→hard top-k curriculum**，并画 **A 保留曲线**（A→A / A→B→A / A→B→C→A'）。
+
+### v0.2 规划（docs/V02_PLAN.md）
+两步走（一次只动一组变量）：v0.2-A（稳定结构+全动态）→ v0.2-B（+warm-up/curriculum）。
+
+### v0.2-A 实测（profile v02，C，40ep，seed0）
+命令：`.venv/bin/python experiments/continual.py --seq core --seed 0 --n_train 1200 --epochs_per_task 40 --run C --profile v02 --out results/summary_v02a.json`
+
+结果（vs v0.1：acc 0.045）：
+| 指标 | v0.1(稳定化+关动态) | v0.2-A(稳定化+全动态) |
+|---|---|---|
+| acc_A_init | 0.045 | **0.143** |
+| acc_A_end | ~0.045 | **0.211** |
+| forgetting_A | — | **0.0** |
+| node_overlap_A_A2 | 0.667 | 0.692 |
+| final_nodes | 15 | 14 |
+| spawn/prune/merge | 3/6/0 | 2/4/0 |
+| final_acc | 各~0.04-0.06 | A=0.211 B=0.002 C=0.008 A2=**0.508** |
+
+**v0.2-A 判定**：
+- 恢复承重动态**有效**：acc_A 从 0.045→0.143（+3 倍），`forgetting_A=0`（A 不遗忘），A2=0.508（同分布能力落地）。
+- **但鸡生蛋确凿**：B_mul=0.002、C_logic=0.008 **近随机**——Router 冷启动未建立跨任务 Node 分工，B/C 的输入分布没被路由到能承载的 Node 组。
+- **结论**：承重动态是必要非充分；光恢复它不够，**必须加 warm-up + soft→hard curriculum** 破路由冷启动 → 进 v0.2-B。
+
+### v0.2-B（profile v02b，C，40ep，seed0，warmup_tasks=1）——已实测
+命令：`.venv/bin/python experiments/continual.py --seq core --seed 0 --n_train 1200 --epochs_per_task 40 --run C --profile v02b --warmup_tasks 1 --out results/summary_v02b.json`
+
+结果（v0.2-B = 稳定结构 + 全动态 + Router warm-up/soft→hard curriculum）：
+| 指标 | v0 | v0.1 | v0.2-A | **v0.2-B** |
+|---|---|---|---|---|
+| acc_A_end | 0.055 | 0.045 | 0.211 | **0.455** |
+| A2(A') | 0.092 | 0.041 | 0.508 | **0.447** |
+| B_mul | 0.0 | 0.041 | 0.002 | 0.020 |
+| C_logic | 0.010 | 0.057 | 0.008 | **0.176** |
+| forgetting_A | — | — | 0.0 | **0.0** |
+| node_overlap_A_A2 | 1.0 | 0.667 | 0.692 | 0.636 |
+| final_nodes | 54 | 15 | 14 | 13 |
+| spawn/prune/merge | 42/5/42 | 3/6/0 | 2/4/0 | 1/5/0 |
+
+**v0.2-B 判定（核心组）**：
+- ✅ **A 学到 0.455**（vs v0.2-A 0.211 翻倍；vs v0/v0.1 的 ~0.05 近 9 倍）—— **鸡生蛋被破解，Router warm-up + soft→hard curriculum 有效**。
+- ✅ `forgetting_A=0`（核心组 A 不遗忘）；A/A' 都 ~0.45 —— **调用而非重学**（GPT 核心验证目标达成）。
+- ⚠️ B_mul=0.020（仍低）、C_logic=0.176（有起色但<A）—— cross-task 分工仍不足，是下一步要解决的（B/C 的 Node 组未充分学到），但相较 v0.2-A（B=0.002/C=0.008）已显著改善。
+- **A_curve_after_each = [0.047, 0.0, 0.006, 0.455]**：学完A=0.047（warm评估走hard偏低）→学完B=0.0 →学完C=0.006 →学完A'=0.455（训A'时重激活A的Node组，A恢复）。**印证「重调用非重学」。**
+
+额外收获：`--seq long`（因程序 bug 误跑）提供长序列对照——A→B→C→A'→D→B 下 forgetting_A=0.886（末端A被遗忘），说明保留曲线在更长序列下会衰减，作为下一步任务难度的依据。
+
+（retention 递进曲线见 summary_v02b_retention.json，待补。）
+
+## 2026-09-06 FDN-v0.2-C（方案A：per-task warm-up）—— 重要发现
+
+Dad 拍板方案 A（每任务都 warm，让每个能力组都能长出）。代码：`--profile v02c --warm_epochs N --warm_mode every`（每任务前 N epoch 全班 soft，之后 hard top-k）；`--warm_mode first` 即 v02b。
+
+命令：`.venv/bin/python experiments/continual.py --seq core --seed 0 --n_train 1200 --epochs_per_task 40 --warm_epochs 8 --run C --profile v02c --out results/summary_v02c.json`
+
+### v0.2-C vs v0.2-B vs v0.2-A（C，seed0，40ep core）
+| 策略 | A_init | A_end | forgetting_A | B | C | A2 | spawn/merge | final_nodes |
+|---|---|---|---|---|---|---|---|---|
+| v0.2-A 无warm | 0.143 | 0.211 | 0.0 | 0.002 | 0.008 | 0.508 | 2/0 | 14 |
+| v0.2-B 首任务warm | 0.047 | **0.455** | **0.0** | 0.020 | 0.176 | 0.447 | 1/0 | 13 |
+| v0.2-C 每任务warm | **0.340** | 0.053 | **0.845** | 0.029 | 0.033 | 0.053 | **0/0** | **12** |
+
+v0.2-C `A_curve_after_each=[0.34, 0.004, 0.018, 0.053]`；retention 递进（v02b）已出：AA=0.143 / ABA=0.135 / ABCA=0.455。
+
+### 判定
+- **方向对一半**：per-task warm 让 A 学得最快（A_init=0.340，v0.2-B 的 7 倍）—— warm 让任务快速长出能力。
+- **灾难性遗忘回归**：学 B 时 A 0.34→0.004（forgetting_A=0.845）。per-task 全班 soft 让每任务更新同一批共享 Node → 强覆盖。
+- **结构零增长（spawn=0）**：全班 soft 时 Router 无 novelty、不再触发 spawn，冻结在 12 初始 Node。
+
+### 机理性结论（复现 GSLM No-Go 根因）
+「warm 的 softness」与「模块隔离的 sparseness」矛盾：soft 太多→覆盖+抑制生长；soft 太少→冷启动学不动但保留好。**共享投影被改写**的根因在 FDN 上复现（per-task 全班 soft 等价于共享投影）。
+
+### 下一步（交 GPT 裁量）
+动态 softness（warm 只用于新 Node 诞生期）+ task-conditioned 局部收敛（只更新本任务 Node 组）；把 warm 强度矩阵交外部审计定夺。
+
 

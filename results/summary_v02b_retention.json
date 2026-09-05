@@ -1,0 +1,424 @@
+{
+  "config": {
+    "hidden": 32,
+    "r": 16,
+    "init_nodes": 12,
+    "eq_nodes": 24,
+    "k_fixed": 5,
+    "kmin": 3,
+    "kmax": 8,
+    "memory_max": 256,
+    "plastic_lr": 0.001,
+    "plastic_cap": 0.1,
+    "eval_every": 120,
+    "spawn_cos_thr": 0.5,
+    "prune_usage_thr": 0.01,
+    "merge_cos_thr": 0.9,
+    "mlp_hidden": 64,
+    "lr": 0.003,
+    "wd": 1e-05,
+    "n_train": 1200,
+    "epochs_per_task": 40,
+    "bs": 32,
+    "use_plasticity": true,
+    "use_memory": true,
+    "dynamic_tau": true,
+    "dynamic_k": true,
+    "young_tasks": 2,
+    "freeze_tasks": 2,
+    "merge_patience": 2,
+    "merge_usage_thr": 0.05,
+    "warmup_steps": 1,
+    "warmup_tasks": 1,
+    "warm_temp": 3.0,
+    "profile": "v02b"
+  },
+  "retention": true,
+  "results": [
+    {
+      "seq_name": "AA",
+      "sequence": [
+        "A_add",
+        "A2_add"
+      ],
+      "results": [
+        {
+          "model": "C",
+          "seed": 0,
+          "param_count": 17240,
+          "forgetting_A": 0.0,
+          "acc_A_init": 0.00390625,
+          "acc_A_end": 0.142578125,
+          "node_overlap_A_A2": 0.8,
+          "node_set_A": [
+            0,
+            2,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "node_set_A2": [
+            0,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "A_curve_after_each": [
+            0.00390625,
+            0.142578125
+          ],
+          "task_affinity_disjoint_frac": 0.0,
+          "task_node_groups": {
+            "A_add": [
+              0,
+              2,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11
+            ],
+            "A2_add": [
+              0,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11
+            ]
+          },
+          "final_nodes": 12,
+          "spawn_count": 0,
+          "prune_count": 3,
+          "merge_count": 0,
+          "memory_size": 32,
+          "plastic_magnitude": 0.27801233530044556,
+          "k_used": 5,
+          "timeline": [
+            {
+              "after": "A_add",
+              "acc": {
+                "A_add": 0.00390625,
+                "A2_add": 0.00390625
+              }
+            },
+            {
+              "after": "A2_add",
+              "acc": {
+                "A_add": 0.142578125,
+                "A2_add": 0.099609375
+              }
+            }
+          ],
+          "final_acc": {
+            "A_add": 0.142578125,
+            "A2_add": 0.099609375
+          },
+          "seq": [
+            "A_add",
+            "A2_add"
+          ],
+          "wall_sec": 400.2
+        }
+      ]
+    },
+    {
+      "seq_name": "ABA",
+      "sequence": [
+        "A_add",
+        "B_mul",
+        "A2_add"
+      ],
+      "results": [
+        {
+          "model": "C",
+          "seed": 0,
+          "param_count": 17240,
+          "forgetting_A": 0.0,
+          "acc_A_init": 0.001953125,
+          "acc_A_end": 0.134765625,
+          "node_overlap_A_A2": 0.6153846153846154,
+          "node_set_A": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            12
+          ],
+          "node_set_A2": [
+            0,
+            1,
+            2,
+            4,
+            6,
+            7,
+            8,
+            12,
+            13
+          ],
+          "A_curve_after_each": [
+            0.001953125,
+            0.01953125,
+            0.134765625
+          ],
+          "task_affinity_disjoint_frac": 0.0,
+          "task_node_groups": {
+            "A_add": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              12
+            ],
+            "B_mul": [
+              0,
+              1,
+              2,
+              4,
+              6,
+              7,
+              12,
+              13
+            ],
+            "A2_add": [
+              0,
+              1,
+              2,
+              4,
+              6,
+              7,
+              8,
+              12,
+              13
+            ]
+          },
+          "final_nodes": 14,
+          "spawn_count": 2,
+          "prune_count": 5,
+          "merge_count": 0,
+          "memory_size": 32,
+          "plastic_magnitude": 0.2506580054759979,
+          "k_used": 5,
+          "timeline": [
+            {
+              "after": "A_add",
+              "acc": {
+                "A_add": 0.001953125,
+                "B_mul": 0.001953125,
+                "A2_add": 0.0078125
+              }
+            },
+            {
+              "after": "B_mul",
+              "acc": {
+                "A_add": 0.01953125,
+                "B_mul": 0.009765625,
+                "A2_add": 0.02734375
+              }
+            },
+            {
+              "after": "A2_add",
+              "acc": {
+                "A_add": 0.134765625,
+                "B_mul": 0.0,
+                "A2_add": 0.21875
+              }
+            }
+          ],
+          "final_acc": {
+            "A_add": 0.134765625,
+            "B_mul": 0.0,
+            "A2_add": 0.21875
+          },
+          "seq": [
+            "A_add",
+            "B_mul",
+            "A2_add"
+          ],
+          "wall_sec": 1025.7
+        }
+      ]
+    },
+    {
+      "seq_name": "ABCA",
+      "sequence": [
+        "A_add",
+        "B_mul",
+        "C_logic",
+        "A2_add"
+      ],
+      "results": [
+        {
+          "model": "C",
+          "seed": 0,
+          "param_count": 17240,
+          "forgetting_A": 0.0,
+          "acc_A_init": 0.015625,
+          "acc_A_end": 0.455078125,
+          "node_overlap_A_A2": 0.8,
+          "node_set_A": [
+            0,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            11,
+            12
+          ],
+          "node_set_A2": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            11,
+            12
+          ],
+          "A_curve_after_each": [
+            0.015625,
+            0.001953125,
+            0.12890625,
+            0.455078125
+          ],
+          "task_affinity_disjoint_frac": 0.0,
+          "task_node_groups": {
+            "A_add": [
+              0,
+              2,
+              3,
+              4,
+              5,
+              7,
+              8,
+              11,
+              12
+            ],
+            "B_mul": [
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              11,
+              12
+            ],
+            "C_logic": [
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              11,
+              12
+            ],
+            "A2_add": [
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              11,
+              12
+            ]
+          },
+          "final_nodes": 13,
+          "spawn_count": 1,
+          "prune_count": 4,
+          "merge_count": 0,
+          "memory_size": 35,
+          "plastic_magnitude": 0.1629810929298401,
+          "k_used": 5,
+          "timeline": [
+            {
+              "after": "A_add",
+              "acc": {
+                "A_add": 0.015625,
+                "B_mul": 0.001953125,
+                "C_logic": 0.01953125,
+                "A2_add": 0.01171875
+              }
+            },
+            {
+              "after": "B_mul",
+              "acc": {
+                "A_add": 0.001953125,
+                "B_mul": 0.111328125,
+                "C_logic": 0.0390625,
+                "A2_add": 0.021484375
+              }
+            },
+            {
+              "after": "C_logic",
+              "acc": {
+                "A_add": 0.12890625,
+                "B_mul": 0.3515625,
+                "C_logic": 0.13671875,
+                "A2_add": 0.150390625
+              }
+            },
+            {
+              "after": "A2_add",
+              "acc": {
+                "A_add": 0.455078125,
+                "B_mul": 0.0,
+                "C_logic": 0.005859375,
+                "A2_add": 0.544921875
+              }
+            }
+          ],
+          "final_acc": {
+            "A_add": 0.455078125,
+            "B_mul": 0.0,
+            "C_logic": 0.005859375,
+            "A2_add": 0.544921875
+          },
+          "seq": [
+            "A_add",
+            "B_mul",
+            "C_logic",
+            "A2_add"
+          ],
+          "wall_sec": 1866.3
+        }
+      ]
+    }
+  ]
+}
