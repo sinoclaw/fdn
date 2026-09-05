@@ -43,6 +43,16 @@ class FDN(nn.Module):
         self.register_buffer("usage", torch.zeros(0))               # 每 Node 使用计数
         self.archived = set()                                        # 被 prune 的 Node（不再路由，保留参数）
 
+        # —— FDN-v0.3：Per-Node 生命周期（Protected Expert Formation）——
+        # 每个 Node 有 maturity/competence，未成熟者 warm（soft 高门控吸收梯度），成熟者 protected（hard 低可塑）。
+        # 节点状态机：NEW -> (warm) WARMING -> LEARNING -> MATURE -> (reactivate) DORMANT/REACTIVATED
+        self.register_buffer("maturity", torch.zeros(0))            # (n,) ∈[0,1] 成熟度
+        self.register_buffer("competence", torch.zeros(0))          # (n,) 能力/competence 分（usage↑ loss↓ entropy↓ 触发）
+        self.register_buffer("node_epoch", torch.zeros(0, dtype=torch.long))  # 每 Node 经历 epoch 数
+        self.mature_thr = 0.6         # 成熟阈值：maturity>thr -> MATURE（protected）
+        self.mature_epochs = 2        # 至少经过 N 个 epoch 才可能成熟
+        self.competence_lr = 0.05     # competence 更新率
+
         for _ in range(initial_nodes):
             self._append_node()
 
@@ -66,6 +76,10 @@ class FDN(nn.Module):
         self.h = torch.cat([self.h, torch.zeros(1, self.hidden)], dim=0)
         self.plastic = torch.cat([self.plastic, torch.zeros(1, self.hidden)], dim=0)
         self.usage = torch.cat([self.usage, torch.zeros(1)], dim=0)
+        # v0.3 生命周期：新 Node 从低成熟度+低 competence 起步（warm 阶段）
+        self.maturity = torch.cat([self.maturity, torch.zeros(1)], dim=0)
+        self.competence = torch.cat([self.competence, torch.zeros(1)], dim=0)
+        self.node_epoch = torch.cat([self.node_epoch, torch.zeros(1, dtype=torch.long)], dim=0)
         return len(self.nodes) - 1
 
     def _grow_keys(self):
@@ -95,22 +109,28 @@ class FDN(nn.Module):
             arch_idx = list(self.archived)
             scores[:, arch_idx] = -1e9
 
-        # —— Router warm-up + soft→hard curriculum ——
-        in_warmup = self.warmup_steps > 0 and self.training and self.step < self.warmup_steps
-        if in_warmup:
-            # 全班 soft 路由：温度自 warm_temp 指数退火到接近 hard（step 越大越陡）
-            frac = self.step / max(1, self.warmup_steps)
-            temp = self.warm_temp * (1.0 - frac) + 1e-2 * frac
-            p_full = torch.softmax(scores / temp, dim=-1)          # (B,n) 全班权重，梯度通往每个 Node & Router
-            top = torch.topk(scores, scores.size(-1), dim=-1)      # 仍取全班（= n）
-            idx = top.indices
-            gate_all = torch.gather(p_full, dim=-1, index=idx)     # 按 idx 排序的 gate（保梯度）
-            gate = gate_all
-        else:
-            k = self._dynamic_k(x, scores) if self.dynamic_k else self.base_k
-            top = torch.topk(scores, min(k, scores.size(-1)), dim=-1)   # (B,k)
-            idx = top.indices                                          # (B,k)
-            gate = torch.softmax(top.values, dim=-1)                   # (B,k)
+        # —— FDN-v0.3：Protected Expert Routing ——
+        # 不再做「全班 soft」（v0.2-C 错在让所有 Node 共享梯度）。改做 per-node 保护：
+        #   * 未成熟 Node（maturity<thr）-> "warm"：在 top-k 内对其 gate 做 soft 放大（高门控、独立吸收梯度）
+        #   * 成熟 Node -> protected：标准 hard gate（top-k softmax），不受后续任务拉宽
+        k = self._dynamic_k(x, scores) if self.dynamic_k else self.base_k
+        top = torch.topk(scores, min(k, scores.size(-1)), dim=-1)      # (B,k)
+        idx = top.indices                                              # (B,k)
+        gate = torch.softmax(top.values, dim=-1)                       # (B,k)
+
+        # per-node warm 掩码（训练时生效）：未成熟 Node 的门控放大 alpha
+        if self.training and hasattr(self, "maturity") and self.maturity.numel() > 0:
+            sel_nodes = idx                                            # (B,k)
+            mat = self.maturity[sel_nodes.clamp(max=self.maturity.numel()-1)]  # (B,k) 每选中 Node 的成熟度
+            warm_mask = (mat < self.mature_thr).float()                # 1=未成熟(warm)
+            # 未成熟 Node 门控放大到 alpha（≥1），成熟 Node 保持 1.0
+            alpha = 1.0 + (self.warm_temp - 1.0) * warm_mask
+            gate = gate * alpha
+            gate = gate / (gate.sum(dim=-1, keepdim=True) + 1e-8)      # 归一化（保贡献总量）
+
+        # 路由熵（用于 Competence Lock / dynamic k 的合法性检查）
+        pp = torch.softmax(scores, dim=-1)
+        entropy = float(-(pp * torch.log(pp + 1e-8)).sum(dim=-1).mean().item())
 
         out_list = []
         mem_ret = self.memory.retrieve(q.detach()) if self.use_memory else torch.zeros(x.shape[0], 1)
@@ -135,9 +155,10 @@ class FDN(nn.Module):
         out = torch.stack(out_list)                                 # (B,1) 含梯度
         if self.use_memory:
             out = out + 0.1 * mem_ret.detach()
-        info = {"idx": idx.cpu().numpy(), "k": (scores.size(-1) if in_warmup else k),
-                "n": len(self.nodes), "warmup": in_warmup,
-                "mem_keys": self.memory.size}
+        info = {"idx": idx.cpu().numpy(), "k": k,
+                "n": len(self.nodes), "warmup": False,
+                "mem_keys": self.memory.size,
+                "entropy": entropy if self.training else 0.0}
         if self.training:
             self.step += 1
         return out, info
@@ -148,6 +169,53 @@ class FDN(nn.Module):
 
     def reset_step(self):
         self.step = 0
+
+    # —— FDN-v0.3：Competence Lock（B）+ Re-activation（C）——
+    def update_lifecycle(self, loss, entropy):
+        """训练后调用。按 competence 信号更新每 Node maturity（Competence Lock）。
+        loss 越小、usage 越高、路由熵越低 -> competence↑ -> maturity 升向 MATURE，plasticity 随之衰减。
+        """
+        if self.maturity.numel() == 0:
+            return
+        device = self.maturity.device
+        # per-node competence 信号：用本 batch 的路由熵（越低越"确认"）+ 使用占比（越高越"成熟"）
+        usage_share = (self.usage.float() + 1e-8) / (self.usage.float().sum() + 1e-8)
+        competence_signal = (1.0 - max(0.0, float(entropy))) * (usage_share * 4.0)  # (n,)
+        competence_signal = torch.clamp(torch.as_tensor(competence_signal, device=device), 0.0, 1.0)
+        # 在线更新 competence（EMA）
+        self.competence = self.competence * (1 - self.competence_lr) + competence_signal * self.competence_lr
+        # maturity 随 competence + node_epoch 上升（加速到 MATURE，保证任务内能成熟）
+        mature_boost = (self.node_epoch.float() >= self.mature_epochs).float()
+        self.maturity = torch.clamp(
+            self.maturity + self.competence * 0.15 + mature_boost * 0.05, 0.0, 1.0)
+        # Competence Lock：成熟 Node 的可塑向量衰减（plasticity ↓ -> protected）
+        mature = (self.maturity >= self.mature_thr).float().unsqueeze(-1).expand_as(self.plastic)
+        self.plastic = self.plastic * (1.0 - 0.1 * mature)   # 成熟 Node 逐步锁死可塑
+
+    def tick_epoch(self):
+        """每个 epoch 结束调用：node_epoch += 1。"""
+        self.node_epoch = self.node_epoch + 1
+
+    def is_mature(self, ni):
+        """第 ni 个 Node 是否成熟（Competence Lock 判据）。"""
+        if ni >= self.maturity.numel():
+            return False
+        return bool(self.maturity[ni] >= self.mature_thr)
+
+    def reactivate_score(self, q):
+        """C. Re-activation：查询 q 对每个成熟 Node 的亲和（用于"找到 A Node 直接恢复"）。
+        返回按亲和排序的成熟 Node 索引（Router 据此优先复用已成型模块，而非重新 warm）。
+        """
+        if self.maturity.numel() == 0:
+            return []
+        # q 可能传 (16,) 或 (1,16)，统一 reshape 成 (B, r)
+        q = q.float().reshape(-1, self.r)
+        K = torch.stack([k for k in self.node_keys]).float()          # (n, r)
+        Kn = K / (K.norm(dim=-1, keepdim=True) + 1e-8)
+        qn = q / (q.norm(dim=-1, keepdim=True) + 1e-8)
+        cos = torch.einsum("br,nr->bn", qn, Kn).mean(dim=0)           # (n,) 平均亲和
+        mature_idx = [i for i in range(self.maturity.numel()) if self.maturity[i] >= self.mature_thr]
+        return sorted(mature_idx, key=lambda i: -float(cos[i]))
 
     def _plastic_update(self, ni, h, out_vec, target, scale):
         """推理期有界 ΔW：plastic += η·scale·(h·sign(err))，再衰减+裁剪。"""

@@ -90,3 +90,21 @@ results/        原始实验 JSON
 **关键证据**：C 的 A 与 A' 激活 Node 完全重合（IoU=1.0），**Router 学会了"同分布任务复用同一批 Node"** —— '长出并调用'机制在路由层真实成立；但因 spawn/merge 各 42 次、结构震荡过频，承载能力的 Node 从未获得稳定权重 → C 全场最差（A2=0.092，B_mul=0.0）。**失败点与 GSLM 不同**：GSLM 是"节点无独立计算路径"，FDN-v0 是"在线结构演化不够稳定"。
 
 > 原始数据见 `results/summary_v0.json`；判定与局限见 `results/V0_REPORT.md`；实现踩坑见 `results/EXPERIMENT_LOG.md`。对外审核以原始 JSON + V0_REPORT + 代码三层对账。
+
+## 结果（v0.1 / v0.2 演进，2026-09-06 如实版）
+
+| 版本 | 机制 | acc_A_end | forgetting | B | C | 关键结论 |
+|---|---|---|---|---|---|---|
+| v0 全动态 | 全动态 | 0.055 | — | 0.0 | 0.010 | 结构震荡（spawn/merge 各42） |
+| v0.1 稳定化 | 稳定结构+关承重动态 | 0.045 | — | 0.041 | 0.057 | 结构治好，但承重机制被关 → 学不会 |
+| v0.2-A 全动态 | 稳定结构+全动态 | 0.211 | 0.0 | 0.002 | 0.008 | 承重动态恢复有效，B/C 仍随机（鸡生蛋） |
+| v0.2-B 首任务warm | +soft→hard课程(首任务) | **0.455** | **0.0** | 0.020 | 0.176 | **最有希望**：A 学会+遗忘0+调用 |
+| v0.2-C 每任务warm | +每任务全班soft | 0.053 | 0.845 | 0.029 | 0.033 | 灾难性遗忘+结构冻结（全班soft=共享投影覆盖） |
+
+**关键发现（GPT v0.2 复审确认）**：`warm 的 softness` 与 `模块隔离的 sparseness` 矛盾——soft 太多（every warm）→ 覆盖+抑制生长；soft 太少（first/无）→ 冷启动学不动但保留好。**结论**：soft 只能用于"新模块诞生成熟"，旧模块须 protected。→ **v0.3 Protected Expert Formation**。
+
+> 详表见 `results/V02_REPORT.md`、`docs/GPT_AUDIT_V02.md`；原始数据 `summary_v02a/b/c.json`。
+
+## 结果（v0.3 Protected Expert Formation，见 results/V03_REPORT.md）
+
+（待实验完成填表）+ per-node warm（未成熟 Node 高门控吸梯度）→ Competence Lock（maturity 升，成熟 Node 可塑衰减）→ Re-activation（Router 复用成熟 A-Node）。

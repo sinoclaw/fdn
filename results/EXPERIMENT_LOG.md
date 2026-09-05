@@ -178,4 +178,30 @@ v0.2-C `A_curve_after_each=[0.34, 0.004, 0.018, 0.053]`；retention 递进（v02
 ### 下一步（交 GPT 裁量）
 动态 softness（warm 只用于新 Node 诞生期）+ task-conditioned 局部收敛（只更新本任务 Node 组）；把 warm 强度矩阵交外部审计定夺。
 
+## 2026-09-06 FDN-v0.3 Protected Expert Formation（按 GPT v0.2 复审建议落地）
+
+GPT 复审（docs/GPT_AUDIT_V02.md）判断：soft routing 本身不是解（v0.2-C 全班 soft = 共享投影覆盖），应改为 **只让新模块 soft warm-up、旧模块 protected**。据此实现 v0.3：
+- **A. per-node warm**：forward 内未成熟 Node（maturity<thr）门控放大吸梯度，成熟 Node protected（hard）。
+- **B. Competence Lock**：update_lifecycle 按 loss/entropy/usage 升 maturity，成熟后 plastic 衰减。
+- **C. Re-activation**：reactivate_score 按亲和返回成熟 Node 排序，Router 复用非重学。
+
+命令：`.venv/bin/python experiments/continual.py --seq core --seed 0 --n_train 1200 --epochs_per_task 40 --run C --profile v03 --out results/summary_v03.json`
+
+### v0.3 结果（C，seed0，40ep core）
+| 指标 | v0.2-B 首任务warm | v0.2-C 每任务warm | **v0.3 保护式** |
+|---|---|---|---|
+| acc_A_end | 0.455 | 0.053 | **0.285** |
+| forgetting_A | 0.0 | **0.845** | **0.0** |
+| A2(A') | 0.447 | 0.053 | **0.391** |
+| B_mul | 0.020 | 0.029 | **0.051** |
+| C_logic | 0.176 | 0.033 | 0.041 |
+| final_nodes | 13 | 12 | 13 |
+| n_mature | — | — | **13/13** |
+
+**v0.3 判定**：
+- ✅ **A 遗忘解决**（forgetting 0.845→0），A_end=0.285、A2=0.391 ——「保护旧模块、不被覆盖」达成（v0.2-C 致命伤修复）。
+- ✅ **B_mul 首次 0.051**（per-node warm 让 B 略学会）。
+- ⚠️ **C_logic 仍低（0.041）**，B/C 与 A 的 reactivation 命中 Node 重叠大 —— **B/C 尚未形成独立 Node 组**。
+- **结论**：v0.3 方向正确（A 遗忘=0），但要做到「A/B/C 各形成独立 Node」的『动态模块形成机制』，需更强的**任务亲和约束**（强制任务映射到不相交 Node 组），即 v0.4 方向。**待 GPT 裁量。**
+
 

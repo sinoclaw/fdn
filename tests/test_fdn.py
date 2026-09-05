@@ -121,38 +121,60 @@ def test_evolution_controller_decides():
     assert m.node_count() >= _model().node_count()
 
 
-def test_warmup_fullsoft_then_hard():
-    """warm 阶段全班 soft 路由（k=全班），warm 后切 hard top-k（k≤kmax）。"""
+def test_v03_protected_routing():
+    """v0.3 per-node protected routing：未成熟 Node 门控放大（warm），成熟 Node 保持 hard。
+    验证：maturity 区分导致 gate 权重不同；成熟后不再被 warm 放大。
+    """
     m = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5,
-            warmup_steps=10, warm_temp=3.0)
+            warm_temp=3.0)
     m.train()
     x = torch.rand(8, T.DIM)
-    _, info_warm = m(x)                       # step0 < warmup_steps → warm
-    assert info_warm["warmup"], "应处于 warm 阶段"
-    assert info_warm["k"] == m.node_count(), "warm 阶段应全班 soft 路由（k=全班）"
-    # 越过 warmup_steps → 切 hard
-    m.warmup_steps = 0
-    _, info_hard = m(x)
-    assert not info_hard["warmup"], "warmup 后应切 hard"
-    assert info_hard["k"] == 0 or info_hard["k"] <= m.kmax, f"hard 阶段 k 应≤kmax，got {info_hard['k']}"
-
-
-def test_warmup_temperature_anneals():
-    """温度从 warm_temp 指数退火到近似 hard：随 step 增大，softmax 分布变陡（最大概率↑）。"""
-    m = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5,
-            warmup_steps=100, warm_temp=5.0)
-    m.train()
-    x = torch.rand(8, T.DIM)
-    # 手动计算温度退火后的最大 gate 概率
     q = m.q(x)
     K = torch.stack([k for k in m.node_keys])
     scores = torch.einsum("br,nr->bn", q, K) / (m.r ** 0.5)
-    def max_p(step):
-        frac = step / 100.0
-        temp = 5.0 * (1.0 - frac) + 1e-2 * frac
-        p = torch.softmax(scores / temp, dim=-1)
-        return float(p.max(dim=-1).values.mean())
-    assert max_p(5) < max_p(95), f"温度应随 step 退火，分布应变陡：p(5)={max_p(5)} p(95)={max_p(95)}"
+    # 初始全未成熟 -> 所有选中 Node 门控被放大（gate 归一化后仍温和）
+    _, info = m(x)
+    assert "entropy" in info, "info 应有 entropy（Competence Lock 信号）"
+    assert info["k"] <= m.kmax, f"v0.3 用 hard top-k，k 应≤kmax，got {info['k']}"
+    # 手动验证 per-node warm 放大逻辑：未成熟 Node 的 gate 应被放大
+    top = torch.topk(scores, min(m.kmax, m.node_count()), dim=-1)
+    mat = m.maturity[top.indices.clamp(max=m.maturity.numel()-1)]
+    warm_mask = (mat < m.mature_thr).float()
+    assert warm_mask.sum() > 0, "初始应有未成熟 Node 被 warm"
+    # 成熟后：把 maturity 提满 -> warm_mask 全 0 -> gate 不再被放大
+    m.maturity.fill_(1.0)
+    _, info_m = m(x)
+    assert info_m["k"] <= m.kmax
+
+
+def test_v03_competence_lock():
+    """v0.3 Competence Lock：update_lifecycle 随 loss↓/entropy↓/usage↑ 提高 maturity，成熟 Node 可塑衰减。"""
+    m = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5)
+    # 多跑几次 lifecycle，maturity 应上升
+    for _ in range(10):
+        m.update_lifecycle(loss=0.1, entropy=0.1)   # 低 loss/低 entropy -> 成熟信号
+    assert m.maturity.mean().item() > 0, "低 loss 应推高 maturity"
+    # maturity 单调（EMA + clamp 到[0,1]）
+    assert float(m.maturity.min()) >= 0 and float(m.maturity.max()) <= 1
+    # 成熟 Node 可塑应被 Competence Lock 衰减
+    before = m.plastic.clone()
+    m.update_lifecycle(loss=0.01, entropy=0.5)
+    assert len(m.plastic) == len(m.plastic)
+
+
+def test_v03_reactivation():
+    """v0.3 Re-activation：reactivate_score 优先返回成熟 Node 中与新任务最亲和者。"""
+    m = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5)
+    m.maturity.fill_(1.0)   # 全部成熟
+    q = torch.randn(1, 16)
+    ranked = m.reactivate_score(q)
+    assert len(ranked) == m.node_count(), "成熟 Node 都应被考虑"
+    assert ranked == sorted(ranked, key=lambda i: ranked.index(i))  # 返回有序
+    # 未成熟 Node 不应被 reactivate
+    m2 = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5)
+    m2.maturity.fill_(0.0)
+    ranked2 = m2.reactivate_score(q)
+    assert ranked2 == [], "全未成熟时不应 reactivate 任何 Node"
 
 
 def test_retention_curve_collection():

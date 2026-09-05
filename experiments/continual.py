@@ -52,17 +52,15 @@ def evaluate_model(model, seq_name, seed):
     return accs, activations
 
 
-def train_task(model, x, y, optimizer, epochs, bs, dynamic, warm_epochs=0):
+def train_task(model, x, y, optimizer, epochs, bs, dynamic, use_lifecycle=False):
     model.train()
     lossf = nn.MSELoss()
     for ep in range(epochs):
-        # 方案 A：per-task warm-up —— 每个任务的前 warm_epochs 个 epoch 用全班 soft 路由，
-        # 让本任务的新分布能路由到 Node、每个 Node 都拿到梯度（生成本任务的 Node 组），之后切 hard top-k。
-        in_warm = warm_epochs > 0 and ep < warm_epochs
-        if in_warm:
-            model.warmup_steps = 10 ** 9   # 超大值 → 本任务此 epoch 全程 warm
-        else:
-            model.warmup_steps = 0
+        # v0.3：per-node 保护在 model.forward 内部生效（未成熟 Node warm、成熟 Node protected），
+        # 不再做"全班 soft"（v0.2-C 教训）。此处仅收集 loss/entropy 作为 Competence Lock 信号。
+        task_loss_sum = 0.0
+        nbatch = 0
+        last_entropy = 0.0
         for xb, yb in make_batches(x, y, bs, shuffle=True):
             optimizer.zero_grad()
             res = model.forward(xb, reset=True)       # toy 独立回归：每次前向清零状态
@@ -70,10 +68,18 @@ def train_task(model, x, y, optimizer, epochs, bs, dynamic, warm_epochs=0):
             loss = lossf(out.reshape(-1), yb)
             loss.backward()
             optimizer.step()
+            task_loss_sum += float(loss.item()); nbatch += 1
+            if isinstance(res, tuple) and isinstance(res[1], dict):
+                last_entropy = res[1].get("entropy", 0.0)
             # FDN：训练时把 (输入, 目标) 写入外部记忆（use_memory 内部关闭则 noop）
             if dynamic and hasattr(model, "write_memory"):
                 model.write_memory(xb, yb)
             # 结构演化改为「任务边界触发」，见 run_one 的 controller.task_boundary
+        # —— v0.3 Competence Lock：每 epoch 结束按 loss/entropy/usage 更新每 Node maturity ——
+        if use_lifecycle and hasattr(model, "update_lifecycle"):
+            avg_loss = task_loss_sum / max(1, nbatch)
+            model.update_lifecycle(avg_loss, last_entropy)
+            model.tick_epoch()
 
 
 def run_one(name, seq, cfg, seed):
@@ -112,12 +118,14 @@ def run_one(name, seq, cfg, seed):
 
     for pos, task in enumerate(seq):
         x, y = T.TASKS[task](cfg["n_train"], seed + pos * 977)
-        # warm 策略：warm_mode='first'=仅首任务 warm（v02b，只破 A 冷启动），'every'=每任务 warm（v02c，方案A，每个能力组都长出）
-        warm_epochs = cfg.get("warm_epochs", 0)
-        if cfg.get("warm_mode") == "first" and pos > 0:
-            warm_epochs = 0
+        # v0.3：per-node protected routing（在 forward 内生效）+ Competence Lock（use_lifecycle）
         train_task(model, x, y, opt, cfg["epochs_per_task"], cfg["bs"], dynamic,
-                   warm_epochs=warm_epochs)
+                   use_lifecycle=cfg.get("use_lifecycle", False))
+        # C. Re-activation：进入新任务前，先看哪些成熟 Node 与新任务亲和（复用而非重新 warm）
+        rec.setdefault("reactivation", {})[task] = []
+        if dynamic and hasattr(model, "reactivate_score"):
+            qq = model.q(torch.from_numpy(x[:8]).float()).detach()
+            rec["reactivation"][task] = model.reactivate_score(qq.mean(dim=0))
         if dynamic and controller is not None:
             controller.task_boundary(model, opt, x)   # 结构演化：任务边界触发（降频）
         accs, act = evaluate_model(model, seq, seed + 1000 + pos)
@@ -163,6 +171,12 @@ def run_one(name, seq, cfg, seed):
         rec["memory_size"] = model.memory.size
         rec["plastic_magnitude"] = plastic_magnitude(model)
         rec["k_used"] = cfg["k_fixed"]
+        # v0.3：Node 生命周期分布（maturity/competence）
+        if hasattr(model, "maturity") and model.maturity.numel() > 0:
+            rec["maturity"] = [round(float(v), 3) for v in model.maturity.detach().cpu().tolist()]
+            rec["competence"] = [round(float(v), 3) for v in model.competence.detach().cpu().tolist()]
+            rec["n_mature"] = int((model.maturity >= model.mature_thr).sum().item())
+        rec["usage"] = [float(v) for v in model.usage.detach().cpu().tolist()]
     else:
         rec["final_nodes"] = len(model.nodes) if hasattr(model, "nodes") else 1
 
@@ -182,8 +196,8 @@ def main():
     ap.add_argument("--bs", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--run", default="all", choices=["all", "A", "B", "D", "C"])
-    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c"],
-                    help="v0=全动态；v01=StabilityPatch(关承重动态+结构稳定化)；v02=稳定结构+全动态；v02b=v02+首任务warm(curriculum)；v02c=v02+每任务warm(per-task warm-up)")
+    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03"],
+                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation（per-node warm+competence lock+re-activation）")
     ap.add_argument("--warm_epochs", type=int, default=0,
                     help="v02c：per-task warm-up —— 每个任务前 N 个 epoch 用全班 soft 路由，之后切 hard top-k")
     args = ap.parse_args()
@@ -229,6 +243,15 @@ def main():
                    spawn_cos_thr=0.5, merge_cos_thr=0.9, prune_usage_thr=0.01,
                    young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05,
                    warmup_steps=1, warm_temp=3.0, warm_epochs=args.warm_epochs, warm_mode="every")
+    elif args.profile == "v03":
+        # 团队 v0.3（GPT 新一轮审计建议）：Protected Expert Formation
+        # A. 新 Node 专属 warm-up：forward 内 per-node warm（未成熟 Node 高门控吸梯度），成熟 Node protected（hard）
+        # B. Competence Lock：update_lifecycle 按 loss/entropy/usage 升 maturity，成熟 Node 可塑衰减
+        # C. Re-activation：reactivate_score 找到成熟 A-Node 直接复用（run_one 已记录）
+        cfg.update(use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
+                   spawn_cos_thr=0.5, merge_cos_thr=0.9, prune_usage_thr=0.01,
+                   young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05,
+                   warmup_steps=0, warm_temp=3.0, use_lifecycle=True)
     cfg["profile"] = args.profile
 
     runs = ["A", "B", "D", "C"] if args.run == "all" else [args.run]
