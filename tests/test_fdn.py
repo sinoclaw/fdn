@@ -114,9 +114,9 @@ def test_metrics_correct():
 def test_evolution_controller_decides():
     m = _model()
     opt = torch.optim.AdamW(m.parameters(), lr=1e-3)
-    ctl = EvolutionController(eval_every=1, spawn_cos_thr=0.99, prune_usage_thr=0.0, merge_cos_thr=0.99)
+    ctl = EvolutionController(spawn_cos_thr=0.99, prune_usage_thr=0.0, merge_cos_thr=0.99)
     x = torch.rand(16, T.DIM)
-    acted = ctl.maybe_evolve(m, opt, x)
+    acted = ctl.task_boundary(m, opt, x)
     assert ctl.spawn_count >= 0
     assert m.node_count() >= _model().node_count()
 

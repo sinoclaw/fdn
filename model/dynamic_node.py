@@ -10,15 +10,17 @@ import torch.nn as nn
 
 
 class DynamicNode(nn.Module):
-    def __init__(self, dim=4, hidden=32):
+    def __init__(self, dim=4, hidden=32, dynamic_tau=True):
         super().__init__()
         self.dim = dim
         self.hidden = hidden
+        self.dynamic_tau = dynamic_tau
         self.in_proj = nn.Linear(dim, hidden)          # 输入投影
         self.cell_h = nn.Linear(hidden, hidden, bias=False)  # 循环权重 W_h
         self.cell_x = nn.Linear(dim, hidden, bias=False)     # 输入权重 W_x
         self.cell_b = nn.Parameter(torch.zeros(hidden))      # 偏置
         self.tau = nn.Linear(hidden + dim, 1)               # τ = f(x, h) ∈ (0,1)
+        self.tau_base = 0.5                                  # 关闭时间动态时的固定 τ
         self.out_head = nn.Linear(hidden, 1)                # 独立输出头（模块隔离关键）
         self.reset()
 
@@ -33,8 +35,11 @@ class DynamicNode(nn.Module):
 
     def forward(self, h, x, dt=1.0):
         """h:(B,H) 旧状态, x:(B,DIM)。返回 (h_new, out)。"""
-        ctx = torch.cat([x, h], dim=-1)
-        tau = torch.sigmoid(self.tau(ctx))                 # (B,1) 时间常数
+        if self.dynamic_tau:
+            ctx = torch.cat([x, h], dim=-1)
+            tau = torch.sigmoid(self.tau(ctx))                 # (B,1) 输入调制时间常数
+        else:
+            tau = torch.full((h.shape[0], 1), self.tau_base, device=h.device)  # 固定 τ（时间动态关闭）
         f = torch.tanh(self.cell_x(x) + self.cell_h(h) + self.cell_b)  # (B,H)
         h_new = h + dt * tau * f                           # 连续时间更新
         out = self.out_head(h_new)                         # (B,1) 独立输出

@@ -16,11 +16,16 @@ from .memory import DynamicMemory
 class FDN(nn.Module):
     def __init__(self, dim=4, hidden=32, r=16, initial_nodes=12,
                  base_k=5, kmin=3, kmax=8, ent_scale=1.0,
-                 memory_max=256, plastic_lr=1e-3, plastic_cap=0.1, plastic_decay=0.98):
+                 memory_max=256, plastic_lr=1e-3, plastic_cap=0.1, plastic_decay=0.98,
+                 use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True):
         super().__init__()
         self.dim, self.hidden, self.r = dim, hidden, r
         self.base_k, self.kmin, self.kmax, self.ent_scale = base_k, kmin, kmax, ent_scale
         self.plastic_lr, self.plastic_cap, self.plastic_decay = plastic_lr, plastic_cap, plastic_decay
+        self.use_plasticity = use_plasticity
+        self.use_memory = use_memory
+        self.dynamic_tau = dynamic_tau
+        self.dynamic_k = dynamic_k
 
         self.q = nn.Linear(dim, r)                 # 任务查询向量
         self.nodes = nn.ModuleList()               # 动态 Node 列表（可 spawn 生长）
@@ -35,7 +40,7 @@ class FDN(nn.Module):
             self._append_node()
 
     def _append_node(self, parent_idx=None, noise=0.05):
-        n = DynamicNode(self.dim, self.hidden)
+        n = DynamicNode(self.dim, self.hidden, dynamic_tau=self.dynamic_tau)
         if parent_idx is not None:
             # 从父节点继承一部分 + 噪声分化（继承+分化）
             with torch.no_grad():
@@ -82,14 +87,14 @@ class FDN(nn.Module):
         if self.archived:                                          # 屏蔽已归档 Node
             arch_idx = list(self.archived)
             scores[:, arch_idx] = -1e9
-        k = self._dynamic_k(x, scores)
+        k = self._dynamic_k(x, scores) if self.dynamic_k else self.base_k
 
         top = torch.topk(scores, k, dim=-1)                       # (B,k)
         idx = top.indices                                          # (B,k)
         gate = torch.softmax(top.values, dim=-1)                   # (B,k)
 
         out_list = []
-        mem_ret = self.memory.retrieve(q.detach())                 # (B,1) 记忆辅助（不进梯度）
+        mem_ret = self.memory.retrieve(q.detach()) if self.use_memory else torch.zeros(x.shape[0], 1)
         activations = []
         for b in range(B):
             sel = idx[b].tolist()
@@ -101,14 +106,16 @@ class FDN(nn.Module):
                 h_old = self.h[ni].detach().clone()                 # 复制成独立张量，避免被后续 inplace 写入污染梯度
                 h_new, out_i = self.nodes[ni](h_old.unsqueeze(0), x[b:b+1])
                 self.h[ni] = h_new.squeeze(0).detach()
-                # 可塑权重（推理期 ΔW）：Hebbian 局部更新，带上限+衰减
-                self._plastic_update(ni, h_new.squeeze(0), out_i.squeeze(0),
-                                     target=None, scale=float(g.detach()))
+                if self.use_plasticity:
+                    # 可塑权重（推理期 ΔW）：Hebbian 局部更新，带上限+衰减
+                    self._plastic_update(ni, h_new.squeeze(0), out_i.squeeze(0),
+                                         target=None, scale=float(g.detach()))
                 term = g * out_i.squeeze(0)                        # 门控保梯度
                 contrib = term if contrib is None else contrib + term
             out_list.append(contrib)
         out = torch.stack(out_list)                                 # (B,1) 含梯度
-        out = out + 0.1 * mem_ret.detach()
+        if self.use_memory:
+            out = out + 0.1 * mem_ret.detach()
         info = {"idx": idx.cpu().numpy(), "k": k, "n": len(self.nodes),
                 "mem_keys": self.memory.size}
         return out, info
@@ -121,6 +128,8 @@ class FDN(nn.Module):
         self.plastic[ni] = torch.clamp(new_p, -self.plastic_cap, self.plastic_cap)
 
     def write_memory(self, x, y):
+        if not self.use_memory:
+            return
         q = self.q(x).detach()
         self.memory.write(q, torch.as_tensor(y, dtype=torch.float32, device=x.device))
 

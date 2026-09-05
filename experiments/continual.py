@@ -52,7 +52,7 @@ def evaluate_model(model, seq_name, seed):
     return accs, activations
 
 
-def train_task(model, x, y, optimizer, epochs, bs, dynamic, controller=None):
+def train_task(model, x, y, optimizer, epochs, bs, dynamic):
     model.train()
     lossf = nn.MSELoss()
     for _ in range(epochs):
@@ -63,11 +63,10 @@ def train_task(model, x, y, optimizer, epochs, bs, dynamic, controller=None):
             loss = lossf(out.reshape(-1), yb)
             loss.backward()
             optimizer.step()
-            # FDN：训练时把 (输入, 目标) 写入外部记忆，供任务再现检测/辅助输出
+            # FDN：训练时把 (输入, 目标) 写入外部记忆（use_memory 内部关闭则 noop）
             if dynamic and hasattr(model, "write_memory"):
                 model.write_memory(xb, yb)
-            if dynamic and controller is not None and hasattr(controller, "maybe_evolve"):
-                controller.maybe_evolve(model, optimizer, xb)
+            # 结构演化改为「任务边界触发」，见 run_one 的 controller.task_boundary
 
 
 def run_one(name, seq, cfg, seed):
@@ -87,10 +86,14 @@ def run_one(name, seq, cfg, seed):
                     initial_nodes=cfg["init_nodes"], base_k=cfg["k_fixed"],
                     kmin=cfg["kmin"], kmax=cfg["kmax"],
                     memory_max=cfg["memory_max"],
-                    plastic_lr=cfg["plastic_lr"], plastic_cap=cfg["plastic_cap"])
+                    plastic_lr=cfg["plastic_lr"], plastic_cap=cfg["plastic_cap"],
+                    use_plasticity=cfg["use_plasticity"], use_memory=cfg["use_memory"],
+                    dynamic_tau=cfg["dynamic_tau"], dynamic_k=cfg["dynamic_k"])
         dynamic, controller = True, EvolutionController(
-            eval_every=cfg["eval_every"], spawn_cos_thr=cfg["spawn_cos_thr"],
-            prune_usage_thr=cfg["prune_usage_thr"], merge_cos_thr=cfg["merge_cos_thr"])
+            spawn_cos_thr=cfg["spawn_cos_thr"], prune_usage_thr=cfg["prune_usage_thr"],
+            merge_cos_thr=cfg["merge_cos_thr"], young_tasks=cfg["young_tasks"],
+            freeze_tasks=cfg["freeze_tasks"], merge_patience=cfg["merge_patience"],
+            merge_usage_thr=cfg["merge_usage_thr"])
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["wd"])
     rec["param_count"] = model.param_count()
@@ -101,8 +104,9 @@ def run_one(name, seq, cfg, seed):
 
     for pos, task in enumerate(seq):
         x, y = T.TASKS[task](cfg["n_train"], seed + pos * 977)
-        train_task(model, x, y, opt, cfg["epochs_per_task"], cfg["bs"],
-                   dynamic, controller)
+        train_task(model, x, y, opt, cfg["epochs_per_task"], cfg["bs"], dynamic)
+        if dynamic and controller is not None:
+            controller.task_boundary(model, opt, x)   # 结构演化：任务边界触发（降频）
         accs, act = evaluate_model(model, seq, seed + 1000 + pos)
         timeline.append({"after": task, "acc": accs})
         all_activations[task] = set(act.get(task, []))
@@ -161,6 +165,8 @@ def main():
     ap.add_argument("--bs", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--run", default="all", choices=["all", "A", "B", "D", "C"])
+    ap.add_argument("--profile", default="v0", choices=["v0", "v01"],
+                    help="v0=全动态；v01=GPT 审计的 Stability Patch（关 plasticity/memory/τ/动态k，结构稳定化）")
     args = ap.parse_args()
 
     seq = T.CORE_SEQUENCE if args.seq == "core" else T.LONG_SEQUENCE
@@ -168,7 +174,18 @@ def main():
                memory_max=256, plastic_lr=1e-3, plastic_cap=0.1,
                eval_every=120, spawn_cos_thr=0.55, prune_usage_thr=0.02, merge_cos_thr=0.95,
                mlp_hidden=64, lr=args.lr, wd=1e-5, n_train=args.n_train,
-               epochs_per_task=args.epochs_per_task, bs=args.bs)
+               epochs_per_task=args.epochs_per_task, bs=args.bs,
+               # 六维动态开关（v01 只保留 Router + 结构 + 静态权重）
+               use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
+               # 结构稳定化（v01 生效）
+               young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05)
+
+    if args.profile == "v01":
+        # GPT 审计：v0.1 Stability Patch —— 一次只动一个变量，先隔离「Router+结构+静态权重」
+        cfg.update(use_plasticity=False, use_memory=False, dynamic_tau=False, dynamic_k=False,
+                   spawn_cos_thr=0.5, merge_cos_thr=0.9, prune_usage_thr=0.01,
+                   young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05)
+    cfg["profile"] = args.profile
 
     results = []
     runs = ["A", "B", "D", "C"] if args.run == "all" else [args.run]
