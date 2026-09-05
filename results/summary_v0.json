@@ -1,0 +1,486 @@
+{
+  "config": {
+    "hidden": 32,
+    "r": 16,
+    "init_nodes": 12,
+    "eq_nodes": 24,
+    "k_fixed": 5,
+    "kmin": 3,
+    "kmax": 8,
+    "memory_max": 256,
+    "plastic_lr": 0.001,
+    "plastic_cap": 0.1,
+    "eval_every": 120,
+    "spawn_cos_thr": 0.55,
+    "prune_usage_thr": 0.02,
+    "merge_cos_thr": 0.95,
+    "mlp_hidden": 64,
+    "lr": 0.003,
+    "wd": 1e-05,
+    "n_train": 1200,
+    "epochs_per_task": 40,
+    "bs": 32
+  },
+  "sequence": [
+    "A_add",
+    "B_mul",
+    "C_logic",
+    "A2_add"
+  ],
+  "results": [
+    {
+      "model": "A",
+      "seed": 0,
+      "param_count": 4545,
+      "forgetting_A": 0.0,
+      "acc_A_init": 1.0,
+      "acc_A_end": 1.0,
+      "node_overlap_A_A2": 1.0,
+      "node_set_A": [],
+      "node_set_A2": [],
+      "task_affinity_disjoint_frac": 1.0,
+      "task_node_groups": {},
+      "final_nodes": 1,
+      "timeline": [
+        {
+          "after": "A_add",
+          "acc": {
+            "A_add": 1.0,
+            "B_mul": 0.06640625,
+            "C_logic": 0.40234375,
+            "A2_add": 1.0
+          }
+        },
+        {
+          "after": "B_mul",
+          "acc": {
+            "A_add": 0.0078125,
+            "B_mul": 1.0,
+            "C_logic": 0.0,
+            "A2_add": 0.0
+          }
+        },
+        {
+          "after": "C_logic",
+          "acc": {
+            "A_add": 0.0390625,
+            "B_mul": 0.091796875,
+            "C_logic": 1.0,
+            "A2_add": 0.0
+          }
+        },
+        {
+          "after": "A2_add",
+          "acc": {
+            "A_add": 1.0,
+            "B_mul": 0.08984375,
+            "C_logic": 0.384765625,
+            "A2_add": 1.0
+          }
+        }
+      ],
+      "final_acc": {
+        "A_add": 1.0,
+        "B_mul": 0.08984375,
+        "C_logic": 0.384765625,
+        "A2_add": 1.0
+      },
+      "seq": [
+        "A_add",
+        "B_mul",
+        "C_logic",
+        "A2_add"
+      ],
+      "wall_sec": 6.8
+    },
+    {
+      "model": "B",
+      "seed": 0,
+      "param_count": 17240,
+      "forgetting_A": 0.0,
+      "acc_A_init": 0.072265625,
+      "acc_A_end": 0.125,
+      "node_overlap_A_A2": 0.7,
+      "node_set_A": [
+        1,
+        2,
+        3,
+        5,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "node_set_A2": [
+        2,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "task_affinity_disjoint_frac": 0.0,
+      "task_node_groups": {
+        "A_add": [
+          1,
+          2,
+          3,
+          5,
+          7,
+          8,
+          9,
+          10,
+          11
+        ],
+        "B_mul": [
+          1,
+          2,
+          3,
+          5,
+          8,
+          9,
+          10,
+          11
+        ],
+        "C_logic": [
+          2,
+          3,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ],
+        "A2_add": [
+          2,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ]
+      },
+      "final_nodes": 12,
+      "timeline": [
+        {
+          "after": "A_add",
+          "acc": {
+            "A_add": 0.072265625,
+            "B_mul": 0.033203125,
+            "C_logic": 0.02734375,
+            "A2_add": 0.10546875
+          }
+        },
+        {
+          "after": "B_mul",
+          "acc": {
+            "A_add": 0.01171875,
+            "B_mul": 0.107421875,
+            "C_logic": 0.03515625,
+            "A2_add": 0.0
+          }
+        },
+        {
+          "after": "C_logic",
+          "acc": {
+            "A_add": 0.056640625,
+            "B_mul": 0.205078125,
+            "C_logic": 0.1796875,
+            "A2_add": 0.05078125
+          }
+        },
+        {
+          "after": "A2_add",
+          "acc": {
+            "A_add": 0.125,
+            "B_mul": 0.0625,
+            "C_logic": 0.078125,
+            "A2_add": 0.095703125
+          }
+        }
+      ],
+      "final_acc": {
+        "A_add": 0.125,
+        "B_mul": 0.0625,
+        "C_logic": 0.078125,
+        "A2_add": 0.095703125
+      },
+      "seq": [
+        "A_add",
+        "B_mul",
+        "C_logic",
+        "A2_add"
+      ],
+      "wall_sec": 377.4
+    },
+    {
+      "model": "D",
+      "seed": 0,
+      "param_count": 34400,
+      "forgetting_A": 0.0,
+      "acc_A_init": 0.31640625,
+      "acc_A_end": 0.57421875,
+      "node_overlap_A_A2": 0.6666666666666666,
+      "node_set_A": [
+        1,
+        3,
+        5,
+        6,
+        7,
+        8,
+        9,
+        11,
+        12,
+        16,
+        22
+      ],
+      "node_set_A2": [
+        1,
+        3,
+        7,
+        8,
+        9,
+        11,
+        14,
+        16,
+        22
+      ],
+      "task_affinity_disjoint_frac": 0.0,
+      "task_node_groups": {
+        "A_add": [
+          1,
+          3,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11,
+          12,
+          16,
+          22
+        ],
+        "B_mul": [
+          1,
+          3,
+          5,
+          6,
+          7,
+          8,
+          9,
+          16,
+          22
+        ],
+        "C_logic": [
+          1,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11,
+          12,
+          14,
+          16,
+          22
+        ],
+        "A2_add": [
+          1,
+          3,
+          7,
+          8,
+          9,
+          11,
+          14,
+          16,
+          22
+        ]
+      },
+      "final_nodes": 24,
+      "timeline": [
+        {
+          "after": "A_add",
+          "acc": {
+            "A_add": 0.31640625,
+            "B_mul": 0.0078125,
+            "C_logic": 0.0234375,
+            "A2_add": 0.48046875
+          }
+        },
+        {
+          "after": "B_mul",
+          "acc": {
+            "A_add": 0.099609375,
+            "B_mul": 0.033203125,
+            "C_logic": 0.013671875,
+            "A2_add": 0.1640625
+          }
+        },
+        {
+          "after": "C_logic",
+          "acc": {
+            "A_add": 0.291015625,
+            "B_mul": 0.25,
+            "C_logic": 0.126953125,
+            "A2_add": 0.37109375
+          }
+        },
+        {
+          "after": "A2_add",
+          "acc": {
+            "A_add": 0.57421875,
+            "B_mul": 0.013671875,
+            "C_logic": 0.095703125,
+            "A2_add": 0.5703125
+          }
+        }
+      ],
+      "final_acc": {
+        "A_add": 0.57421875,
+        "B_mul": 0.013671875,
+        "C_logic": 0.095703125,
+        "A2_add": 0.5703125
+      },
+      "seq": [
+        "A_add",
+        "B_mul",
+        "C_logic",
+        "A2_add"
+      ],
+      "wall_sec": 757.1
+    },
+    {
+      "model": "C",
+      "seed": 0,
+      "param_count": 17240,
+      "forgetting_A": 0.09677419354838712,
+      "acc_A_init": 0.060546875,
+      "acc_A_end": 0.0546875,
+      "node_overlap_A_A2": 1.0,
+      "node_set_A": [
+        0,
+        3,
+        4,
+        5,
+        8,
+        10,
+        11
+      ],
+      "node_set_A2": [
+        0,
+        3,
+        4,
+        5,
+        8,
+        10,
+        11
+      ],
+      "task_affinity_disjoint_frac": 0.0,
+      "task_node_groups": {
+        "A_add": [
+          0,
+          3,
+          4,
+          5,
+          8,
+          10,
+          11
+        ],
+        "B_mul": [
+          0,
+          3,
+          4,
+          5,
+          8,
+          10,
+          11
+        ],
+        "C_logic": [
+          0,
+          3,
+          4,
+          5,
+          8,
+          10,
+          11
+        ],
+        "A2_add": [
+          0,
+          3,
+          4,
+          5,
+          8,
+          10,
+          11
+        ]
+      },
+      "final_nodes": 54,
+      "spawn_count": 42,
+      "prune_count": 5,
+      "merge_count": 42,
+      "memory_size": 51,
+      "plastic_magnitude": 0.048602063208818436,
+      "k_used": 5,
+      "timeline": [
+        {
+          "after": "A_add",
+          "acc": {
+            "A_add": 0.060546875,
+            "B_mul": 0.01953125,
+            "C_logic": 0.013671875,
+            "A2_add": 0.056640625
+          }
+        },
+        {
+          "after": "B_mul",
+          "acc": {
+            "A_add": 0.025390625,
+            "B_mul": 0.01953125,
+            "C_logic": 0.01953125,
+            "A2_add": 0.0
+          }
+        },
+        {
+          "after": "C_logic",
+          "acc": {
+            "A_add": 0.00390625,
+            "B_mul": 0.001953125,
+            "C_logic": 0.166015625,
+            "A2_add": 0.0
+          }
+        },
+        {
+          "after": "A2_add",
+          "acc": {
+            "A_add": 0.0546875,
+            "B_mul": 0.0,
+            "C_logic": 0.009765625,
+            "A2_add": 0.091796875
+          }
+        }
+      ],
+      "final_acc": {
+        "A_add": 0.0546875,
+        "B_mul": 0.0,
+        "C_logic": 0.009765625,
+        "A2_add": 0.091796875
+      },
+      "seq": [
+        "A_add",
+        "B_mul",
+        "C_logic",
+        "A2_add"
+      ],
+      "wall_sec": 1372.5
+    }
+  ]
+}

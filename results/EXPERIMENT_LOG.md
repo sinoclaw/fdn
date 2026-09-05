@@ -46,3 +46,27 @@
 - 顺序任务 A_add→B_mul→C_logic→A2_add，40 epoch/任务，对比 A/B/D/C。
 
 （实验完成后在本文件尾部追加结果与判定。）
+
+## 2026-09-05 实验完成（seed=0，40ep/任务）
+
+命令：`.venv/bin/python experiments/continual.py --seq core --seed 0 --n_train 1200 --epochs_per_task 40 --run all --out results/summary_v0.json`
+
+### 结果（摘要，完整见 V0_REPORT.md 与 summary_v0.json）
+| 模型 | 最终Node | spawn/prune/merge | A_add 末 | A/A'重合 | 判定 |
+|---|---|---|---|---|---|
+| A (MLP) | 1 | — | 1.00 | 1.0 | 学得最好，动态缺失 |
+| B (静态12) | 12 | — | 0.125 | 0.70 | 静态 MoE 中游 |
+| D (静态24) | 24 | — | 0.574 | 0.67 | 容量大 → 略好 |
+| C (FDN-v0) | 54 | 42/5/42 | 0.055 | **1.0** | **全场最差** |
+
+### 判定：假说未获支持；失败点与 GSLM 不同
+- **成立**：全动态机制真实发生（结构 12→54、spawn/merge 各42、记忆 51 条、可塑 0.049）；Router 学会"同分布任务复用同批 Node"（A/A' Node 集合完全一致，IoU=1.0）。
+- **失败**：结构震荡（每 120 batch 评估 + spawn_cos_thr=0.55 + merge_cos_thr=0.95）压过学习节奏 → 承载能力的目标 Node 无稳定权重 → C 全场最差。
+- **对比**：GSLM 根因=节点无独立计算路径；FDN-v0 根因=在线结构演化不稳。**不是同一失败**，本轮修复了 GSLM 缺口却暴露新缺口。
+
+### 局限
+序列以加法变体收尾污染"forgetting on A"判据（实际对比应为"终点 A_add"）；MoE 族本身比 MLP 难学（B/D/C 均远低于 A）；仅单 seed；toy 容量充足未做容量成瓶颈档位。
+
+### 待办（交 GPT 裁量）
+若给假说更公平机会 → 改实现（任务边界触发结构评估、降 merge 率、加节点冻结/毕业），另立版，非本版范围。
+

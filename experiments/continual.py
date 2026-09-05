@@ -33,13 +33,10 @@ def make_batches(x, y, bs, shuffle=True, seed=0):
 def predict(model, x, dynamic=False):
     model.eval()
     with torch.no_grad():
-        if hasattr(model, "forward"):
-            out, info = model.forward(x, reset=True)
-            return out.numpy().reshape(-1), info
-        out = model.forward(x, reset=True)
-        if isinstance(out, tuple):
-            return out[0].numpy().reshape(-1), {}
-        return out.numpy().reshape(-1), {}
+        res = model.forward(x, reset=True)
+        if isinstance(res, tuple):
+            return res[0].numpy().reshape(-1), res[1]
+        return res.numpy().reshape(-1), {}
 
 
 def evaluate_model(model, seq_name, seed):
@@ -61,7 +58,8 @@ def train_task(model, x, y, optimizer, epochs, bs, dynamic, controller=None):
     for _ in range(epochs):
         for xb, yb in make_batches(x, y, bs, shuffle=True):
             optimizer.zero_grad()
-            out, info = model.forward(xb, reset=True)        # toy 独立回归：每次前向清零状态
+            res = model.forward(xb, reset=True)       # toy 独立回归：每次前向清零状态
+            out = res[0] if isinstance(res, tuple) else res
             loss = lossf(out.reshape(-1), yb)
             loss.backward()
             optimizer.step()
