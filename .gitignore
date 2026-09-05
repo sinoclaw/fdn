@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# 模型权重/中间产物
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+wandb/
+
+# 临时
+.DS_Store
+nohup.out
+*.log
+
+# 实验输出（保留 summary JSON，忽略临时细分）
+results/*_tmp.json
+.git_pat
