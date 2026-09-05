@@ -70,3 +70,30 @@
 ### 待办（交 GPT 裁量）
 若给假说更公平机会 → 改实现（任务边界触发结构评估、降 merge 率、加节点冻结/毕业），另立版，非本版范围。
 
+## 2026-09-05 FDN-v0.1 Stability Patch（按 GPT 审计）——已完成并跑通
+
+按 docs/GPT_AUDIT.md 落地 v0.1：
+- 关 Hebbian plasticity、关 memory、固定 τ、固定 k（只留 Dynamic Router + Dynamic Structure + Static Node Weights）
+- Structure 稳定化：任务边界触发 Evolution、Spawn 冻结期（freeze_tasks）、Merge 长期稳定（merge_patience + 非 young + 低 usage）、Node age/stability 记录
+
+命令：`.venv/bin/python experiments/continual.py --profile v01 --seed 0 --n_train 1200 --epochs_per_task 40 --run C --out results/summary_v01.json`
+
+### v0.1 vs v0（均 40ep 顺序 A→B→C→A'）
+| | 最终Node | spawn/prune/merge | mem | acc_A末 | overlap_A_A2 | 说明 |
+|---|---|---|---|---|---|---|
+| v0 全动态 | 54 | 42/5/42 | 51 | 0.055 | 1.0 | 结构震荡 |
+| v0.1 稳定化 | 15 | 3/6/**0** | 0 | 0.045 | 0.667 | merge 震荡被治住，但学习未救回 |
+
+### v0.1 判定（如实）
+- **结构稳定化目标达成**：merge 0、节点 15、spawn 3 —— GPT 要的"停止 spawn→merge 震荡、冻结年轻节点"实现并验证。
+- **但学习未提升**：v0.1 最终 acc 各任务 ~0.04-0.06（与 v0 同级、近随机）；`acc_A_init=0.016`，即**"Router+结构+静态权重"最小组合连任务 A（40ep）都学不会**。
+- **单任务对照**（全动态开关、30ep、无 controller，1200 样本）：A_add 可达 **0.598** —— 证明这些动态（memory/plasticity/τ/动态k）对"能学会"是承重的，GPT 建议的隔离最小组合把承重机制也抽掉了。
+- **定性**：v0.1 部分**证伪**了 GPT 的假设（结构不稳定非唯一根因）——即使结构完全稳定 + 最小组合，路由模块化 FDN 在该 toy 任务上仍无法学到可用精度。失败更可能是"路由模块化 + 逐样本 top-k 门控"的优化本身脆弱，而非仅结构震荡。
+
+### 局限
+单 seed；toy 任务容量充足、MoE 族本就比稠密 MLP 难学（A=1.0 vs D=0.574）；消融在短 epoch 下噪声大（15ep 连全动态都只 0.074），未做大样本长 epoch 消融定量。
+
+### 下一步待议（交 GPT）
+"能学会"的承重机制（memory/plasticity/τ/k）与该机制"学会怎么做"的区分，是 v0.1 给出的新问题：最小组合学不动，说明隔离法需改为"保留承重动态、只关非承重的结构/路由变量"，或以更难/更稳任务重测。
+
+

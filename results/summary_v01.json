@@ -1,0 +1,169 @@
+{
+  "config": {
+    "hidden": 32,
+    "r": 16,
+    "init_nodes": 12,
+    "eq_nodes": 24,
+    "k_fixed": 5,
+    "kmin": 3,
+    "kmax": 8,
+    "memory_max": 256,
+    "plastic_lr": 0.001,
+    "plastic_cap": 0.1,
+    "eval_every": 120,
+    "spawn_cos_thr": 0.5,
+    "prune_usage_thr": 0.01,
+    "merge_cos_thr": 0.9,
+    "mlp_hidden": 64,
+    "lr": 0.003,
+    "wd": 1e-05,
+    "n_train": 1200,
+    "epochs_per_task": 40,
+    "bs": 32,
+    "use_plasticity": false,
+    "use_memory": false,
+    "dynamic_tau": false,
+    "dynamic_k": false,
+    "young_tasks": 2,
+    "freeze_tasks": 2,
+    "merge_patience": 2,
+    "merge_usage_thr": 0.05,
+    "profile": "v01"
+  },
+  "sequence": [
+    "A_add",
+    "B_mul",
+    "C_logic",
+    "A2_add"
+  ],
+  "results": [
+    {
+      "model": "C",
+      "seed": 0,
+      "param_count": 17240,
+      "forgetting_A": 0.0,
+      "acc_A_init": 0.015625,
+      "acc_A_end": 0.044921875,
+      "node_overlap_A_A2": 0.6666666666666666,
+      "node_set_A": [
+        1,
+        2,
+        6,
+        7,
+        9,
+        11,
+        12
+      ],
+      "node_set_A2": [
+        1,
+        2,
+        7,
+        9,
+        11,
+        12,
+        13,
+        14
+      ],
+      "task_affinity_disjoint_frac": 0.0,
+      "task_node_groups": {
+        "A_add": [
+          1,
+          2,
+          6,
+          7,
+          9,
+          11,
+          12
+        ],
+        "B_mul": [
+          1,
+          2,
+          6,
+          7,
+          9,
+          11,
+          12,
+          13
+        ],
+        "C_logic": [
+          1,
+          2,
+          6,
+          7,
+          9,
+          11,
+          12,
+          13
+        ],
+        "A2_add": [
+          1,
+          2,
+          7,
+          9,
+          11,
+          12,
+          13,
+          14
+        ]
+      },
+      "final_nodes": 15,
+      "spawn_count": 3,
+      "prune_count": 6,
+      "merge_count": 0,
+      "memory_size": 0,
+      "plastic_magnitude": 0.0,
+      "k_used": 5,
+      "timeline": [
+        {
+          "after": "A_add",
+          "acc": {
+            "A_add": 0.015625,
+            "B_mul": 0.005859375,
+            "C_logic": 0.056640625,
+            "A2_add": 0.013671875
+          }
+        },
+        {
+          "after": "B_mul",
+          "acc": {
+            "A_add": 0.015625,
+            "B_mul": 0.00390625,
+            "C_logic": 0.021484375,
+            "A2_add": 0.01171875
+          }
+        },
+        {
+          "after": "C_logic",
+          "acc": {
+            "A_add": 0.009765625,
+            "B_mul": 0.029296875,
+            "C_logic": 0.046875,
+            "A2_add": 0.001953125
+          }
+        },
+        {
+          "after": "A2_add",
+          "acc": {
+            "A_add": 0.044921875,
+            "B_mul": 0.041015625,
+            "C_logic": 0.056640625,
+            "A2_add": 0.041015625
+          }
+        }
+      ],
+      "final_acc": {
+        "A_add": 0.044921875,
+        "B_mul": 0.041015625,
+        "C_logic": 0.056640625,
+        "A2_add": 0.041015625
+      },
+      "seq": [
+        "A_add",
+        "B_mul",
+        "C_logic",
+        "A2_add"
+      ],
+      "wall_sec": 300.9
+    }
+  ]
+}
