@@ -18,7 +18,8 @@ class FDN(nn.Module):
                  base_k=5, kmin=3, kmax=8, ent_scale=1.0,
                  memory_max=256, plastic_lr=1e-3, plastic_cap=0.1, plastic_decay=0.98,
                  use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
-                 warmup_steps=0, warm_temp=3.0, task_constraint=False):
+                 warmup_steps=0, warm_temp=3.0, task_constraint=False,
+                 n_tasks=4, soft_task_bias=0.0):
         super().__init__()
         self.dim, self.hidden, self.r = dim, hidden, r
         self.base_k, self.kmin, self.kmax, self.ent_scale = base_k, kmin, kmax, ent_scale
@@ -61,6 +62,14 @@ class FDN(nn.Module):
         self.current_task = -1        # 当前训练/评估任务 id（由 set_task 注入）
         self.task_constraint = task_constraint   # v0.4 开关：启用强制不相交路由（由 cfg 传入）
         self.n_owned = 0              # 已归属任务的 Node 数（用于隔离检查）
+
+        # —— FDN-v0.4-lite：软任务亲和（soft task bias）——
+        # 不硬屏蔽（v0.4 反证已证伪硬隔离），改为给 query 加一个可学习任务偏移 task_emb[task_id]，
+        # 软性鼓励 Router 对同分布任务（A/A'）走相似 Node、异分布任务（B/C）偏向不同 Node，但允许复用。
+        self.soft_task_bias = soft_task_bias   # 权重 w（0=不启用软偏；>0 启用）
+        if soft_task_bias > 0:
+            self.task_emb = nn.Embedding(n_tasks, r)
+            self.task_emb.weight.data.mul_(0.1)   # 初始小偏移，随训练学习
 
         for _ in range(initial_nodes):
             self._append_node()
@@ -117,20 +126,25 @@ class FDN(nn.Module):
         if reset:
             self.h.zero_()
         q = self.q(x)                                             # (B,R)
+        # v0.4-lite 软任务亲和：给 query 加可学习任务偏移（软性偏向，不屏蔽）
+        if self.soft_task_bias > 0 and self.current_task >= 0:
+            q = q + self.soft_task_bias * self.task_emb(torch.tensor([self.current_task], device=q.device))
         K = torch.stack([k for k in self.node_keys])              # (n,R)
         scores = torch.einsum("br,nr->bn", q, K) / math.sqrt(self.r)  # (B,n) 任务亲和
         if self.archived:                                          # 屏蔽已归档 Node
             arch_idx = list(self.archived)
             scores[:, arch_idx] = -1e9
 
-        # —— v0.4：任务亲和约束（强制不相交）——
+        # —— v0.4：任务亲和约束（强制不相交，仅 task_constraint=True 时生效）——
         # 屏蔽归属其他任务的 Node（当前任务 protected 它们），只允许「本任务 Node + 未归属 Node」进入 top-k。
-        tm = self._task_mask()
-        if tm is not None:
-            scores = scores.clone()
-            scores[:, ~tm] = -1e9
-            # 可路由 Node 数受 task mask 限制：k 不得超过「与当前任务亲和可用的 Node 数」
-            allow_count = int(tm.sum().item())
+        tm = None
+        if self.task_constraint:
+            tm = self._task_mask()
+            if tm is not None:
+                scores = scores.clone()
+                scores[:, ~tm] = -1e9
+                # 可路由 Node 数受 task mask 限制：k 不得超过「与当前任务亲和可用的 Node 数」
+                allow_count = int(tm.sum().item())
 
         # —— FDN-v0.3：Protected Expert Routing ——
         # 不再做「全班 soft」（v0.2-C 错在让所有 Node 共享梯度）。改做 per-node 保护：

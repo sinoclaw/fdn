@@ -144,7 +144,8 @@ def run_one(name, seq, cfg, seed):
                     use_plasticity=cfg["use_plasticity"], use_memory=cfg["use_memory"],
                     dynamic_tau=cfg["dynamic_tau"], dynamic_k=cfg["dynamic_k"],
                     warmup_steps=cfg.get("warmup_steps", 0), warm_temp=cfg.get("warm_temp", 3.0),
-                    task_constraint=cfg.get("task_constraint", False))
+                    task_constraint=cfg.get("task_constraint", False),
+                    n_tasks=cfg.get("n_tasks", 4), soft_task_bias=cfg.get("soft_task_bias", 0.0))
         dynamic, controller = True, EvolutionController(
             spawn_cos_thr=cfg["spawn_cos_thr"], prune_usage_thr=cfg["prune_usage_thr"],
             merge_cos_thr=cfg["merge_cos_thr"], young_tasks=cfg["young_tasks"],
@@ -161,9 +162,11 @@ def run_one(name, seq, cfg, seed):
     for pos, task in enumerate(seq):
         x, y = T.TASKS[task](cfg["n_train"], seed + pos * 977)
         # v0.4：任务亲和约束 —— 任务边界注入当前任务 id，并为每个任务 spawn 专属 Node 组（强制不相交）
+        #   v04lite（软亲和）只 set_task 加偏移，不 spawn 专属 Node（保持 v0.3 共享结构）
         if dynamic and hasattr(model, "set_task"):
             model.set_task(pos)          # 用任务内部序号 pos 作为 task_id（A=0,B=1,C=2,A'=3）
-            ensure_task_nodes(model, pos, cfg, seed, optimizer=opt)   # 若该任务无专属 Node 组则 spawn 一批
+            if cfg.get("task_constraint", False):
+                ensure_task_nodes(model, pos, cfg, seed, optimizer=opt)
         # v0.3：per-node protected routing（在 forward 内生效）+ Competence Lock（use_lifecycle）
         train_task(model, x, y, opt, cfg["epochs_per_task"], cfg["bs"], dynamic,
                    use_lifecycle=cfg.get("use_lifecycle", False))
@@ -243,10 +246,12 @@ def main():
     ap.add_argument("--bs", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--run", default="all", choices=["all", "A", "B", "D", "C"])
-    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03", "v04"],
-                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation；v04=+任务亲和约束(per-task专属Node组强制不相交)")
+    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03", "v04", "v04lite"],
+                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation；v04=+硬隔离(已反证)；v04lite=+软任务亲和(soft task bias)")
     ap.add_argument("--init_per_task", type=int, default=4,
                     help="v04：每个任务 spawn 的专属 Node 数（强制不相交路由）")
+    ap.add_argument("--soft_task_bias", type=float, default=0.3,
+                    help="v04lite：软任务亲和权重 w（q += w*task_emb[task]，不硬屏蔽）")
     args = ap.parse_args()
 
     if args.seq == "retention":
@@ -308,6 +313,16 @@ def main():
                    young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05,
                    warmup_steps=0, warm_temp=3.0, use_lifecycle=True,
                    task_constraint=True, init_per_task=args.init_per_task)
+    elif args.profile == "v04lite":
+        # 团队 v0.4-lite（修正方向）：v0.3 + 软任务亲和（soft task bias）
+        # 不硬隔离（v0.4 已反证），改为给 query 加可学习任务偏移 q += w*task_emb[task]，
+        # 软性鼓励不同任务偏向不同 Node 组、但允许跨任务复用（保住 A/A' 调用）。task_constraint=False。
+        cfg.update(use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
+                   spawn_cos_thr=0.5, merge_cos_thr=0.9, prune_usage_thr=0.01,
+                   young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05,
+                   warmup_steps=0, warm_temp=3.0, use_lifecycle=True,
+                   task_constraint=False, n_tasks=len(T.CORE_SEQUENCE),
+                   soft_task_bias=args.soft_task_bias)
     cfg["profile"] = args.profile
 
     runs = ["A", "B", "D", "C"] if args.run == "all" else [args.run]

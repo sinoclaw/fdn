@@ -209,6 +209,29 @@ def test_v04_task_owner_on_append():
     assert int(m.task_owner[-1]) == 5, "set_task(5) 后新 Node 应归属 task5"
 
 
+def test_v04lite_soft_task_bias():
+    """v0.4-lite 软任务亲和：set_task 后 query 加 task_emb 偏移（软性偏向），且不硬屏蔽任何 Node。
+    验证：① q 被任务偏移（不同 task 的 q 不同）；② 无 task_constraint 时 _task_mask 返回 None（不屏蔽，保住复用）。
+    """
+    m = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5,
+            task_constraint=False, n_tasks=4, soft_task_bias=0.5)
+    # ① 不同任务偏移 → 不同 scores
+    x = torch.rand(8, T.DIM)
+    m.eval()
+    m.set_task(0)
+    _, info0 = m(x)
+    m.set_task(1)
+    _, info1 = m(x)
+    assert m._task_mask() is None, "v04lite 不硬屏蔽（task_constraint=False）"
+    assert info0["n"] == info1["n"] == m.node_count(), "两种任务都路由全部 Node"
+    # ② task_emb 存在且可学习
+    assert hasattr(m, "task_emb") and m.task_emb.weight.shape == (4, 8)
+    # ③ soft_task_bias=0 时不加偏移
+    m0 = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5,
+             task_constraint=False, soft_task_bias=0.0)
+    assert not hasattr(m0, "task_emb"), "soft_task_bias=0 不应创建 task_emb"
+
+
 def test_retention_curve_collection():
     """A→A / A→B→A / A→B→C→A' 逐段测 A 保留（模拟曲线采集的度量口径）。"""
     # 用 keep-A 精度作为 retained 度量（容忍任务序列里 A 只出现一次，用 A'=A2_add 近似）
