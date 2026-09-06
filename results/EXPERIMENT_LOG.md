@@ -525,6 +525,32 @@ v3 用"每任务独立 cap"（结构给定，非 oracle）。下一步可验证�
 
 > 产物：`/tmp/probe_bdh_fw.py`、`/tmp/probe_bdh_fw2.py`、`/tmp/probe_bdh_fw3.py`（临时）。
 
+## 2026-09-06 FastWeights 自组织能力分配：卡点诊断（任务太简单是障碍）
+
+v3 已证 FastWeights（每能力独立路径）正解。本步升级为**自组织 cap 池**（模型自动复用/新建 cap，无 oracle）。
+
+### v1（首个 batch MSE<阈值 判 fit，/tmp/probe_bdh_pool.py）
+| seed | A | B | A' | A_forget | n_caps |
+|---|---|---|---|---|---|
+| 0 | 1.0 | 0.021 | 1.0 | 0.0 | 1 |
+| 1 | 1.0 | 0.0 | 1.0 | 0.0 | 1 |
+| 2 | 1.0 | 0.016 | 1.0 | 0.0 | 1 |
+
+**全 n_caps=1，B 全塌**——首个 batch MSE 太低，永不触发 spawn，全部复用 cap0，B 被覆盖。
+
+### v2（快速试训各 cap 测验证 acc 选 cap，/tmp/probe_bdh_pool2.py）
+仍 n_caps=1——probe 8ep 后 cap0 对 B 也达 acc≥0.8（阈值），探测信号无法区分能力边界。
+
+### 诊断结论（诚实）
+**toy 任务太简单：一个 cap 用 8ep 就能 fit 任何回归任务到高 acc**——"能力边界探测"在简单任务上无意义（与 GSLM 容量饱和结论一致：简单任务一个共享网络全够用，无需分能力）。要测"自组织能力边界"，**必须用需要不同计算通路的任务**（如 z 条件任务 / 异或 / 非线性分解），否则任何 cap 都能通吃。
+
+### 当前定位
+- ✅ **v3（每能力独立路径）= 正解**：A/B/A' 全 1.0 + A_forget=0，Fast Weights 打破"共享覆盖"死结（已 commit 2fb2e19）。
+- ⚠️ **自组织**被"任务太简单"卡住：探测信号无法区分能力边界，需更难任务才能验证。
+- 自组织不是方向错，是**实验任务给不出能力边界**；v3 的结构正解已确立。
+
+> 产物：`/tmp/probe_bdh_pool.py`、`/tmp/probe_bdh_pool2.py`（临时）。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
