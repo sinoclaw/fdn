@@ -323,4 +323,17 @@ GPT v0.5 裁定关键：先多 seed 验证 w=0.5（至少 5 次），若 A_end>0
 - **判断**：批次 2 达成「Node 级 spawn 判据启动」这一核心目标（机制已动）；「分化」是 spawn 后 node 是否被 Router 专属化的问题，需批次 3（Plasticity Decay 5 态让新 node 高可塑、成熟后低可塑保护）配合 + 后续 Router 偏向新 node。
 > 产物：`/tmp/probe_v06c.json`（临时）。测试 18/18。
 
+## 2026-09-06 FDN-v0.6 批次 3：Plasticity Decay 5 态
+
+按 GPT 生命周期（NEW 高可塑 / WARMING / LEARNING / MATURE 低 / DORMANT 极低 / REACTIVATED 临时高）实现 5 态状态机。
+- model/fdn.py：+`life_stage` / `last_active_epoch` buffer；`update_lifecycle` 由「单一 mature×0.1 衰减」改为「按 life_stage 分级衰减」（`plastic_decay_map`：NEW 0.98 / WARMING 0.95 / LEARNING 0.90 / MATURE 0.85 / DORMANT 0.98 / REACTIVATED 1.15）；`_mark_used` 记录 last_active_epoch。
+- 测试：+`test_v06_plasticity_five_stage`（验证 NEW/MATURE/DORMANT 不同 stage 与 plastic 衰减差异）——19/19 全绿。
+
+### 批次 3 关键发现（探针 v06 mini, seed 0）
+- ✅ **5 态状态机在真实训练中运作**：life_stage=[3,3,4,4,3,3,4,4,4,3,3,4,3,0]（MATURE/DORMANT/NEW 分布合理）；spawn=2 正常。
+- ❌ **but A 灾难性遗忘**：forgetting_A=0.992，A_curve=[0.252, 0.412, 0.002]——A 在 B 任务升到 0.412，A' 时崩到 0.002。
+- ❌ **分化仍未形成**：disjoint=0，cos(A,B)=0.989，cos(A,A')=1.0；node12 仍被 B 和 A' 共用。
+- 🎯 **本质缺口（批次 3 核心教训）**：**Plasticity Decay 只保护 Hebbian 推理期更新，不拦 Adam 主训练梯度**——A 的 node 在 B 任务仍被 Router 选中 → Adam 更新 → A 能力被覆盖。这指向：**要实现真模块隔离，须在任务边界冻结旧 node（Adam 不更新旧 node 参数）或新 spawn node 专属化**——正是 GSLM v0.1「真模块隔离」验证过的方向。
+> 产物：`/tmp/probe_v06d.json`（临时）。测试 19/19。
+
 

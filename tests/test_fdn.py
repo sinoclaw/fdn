@@ -266,6 +266,32 @@ def test_v06_node_spawn_score():
     assert sustained, "spawn_patience=1 应立即 sustained"
 
 
+def test_v06_plasticity_five_stage():
+    """v0.6 批次3：Plasticity Decay 5 态。验证 NEW/MATURE 等不同 life_stage 有不同 plastic 衰减系数。
+    NEW(0) node 应较高可塑（衰减慢），MATURE(3) node 应较低可塑（衰减快），DORMANT(4) 应极低。
+    """
+    import torch
+    from model.fdn import FDN
+    m = FDN(dim=4, hidden=16, r=8, initial_nodes=5, base_k=3, kmin=2, kmax=5)
+    m.maturity.data = torch.tensor([0.0, 0.0, 0.7, 0.8, 0.9])       # 前2未成熟，后3成熟
+    m.node_epoch.data = torch.tensor([0, 1, 7, 7, 7])
+    m.last_active_epoch.data = torch.tensor([0, 0, 7, 7, 0])        # node4 很久没被选中 → DORMANT (7-0>6)
+    m.plastic.data = torch.ones(5, 16) * 0.5
+    m.node_error.data = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0])
+    m.usage.data = torch.tensor([5., 5., 5., 5., 1.])
+    m.update_lifecycle(0.1, 0.5)
+    stages = m.life_stage.tolist()
+    # node0=NEW(0), node1=WARMING(1), node2/3=MATURE(3), node4=DORMANT(4)
+    assert stages[0] == 0, f"node0 应为 NEW，实际{stages[0]}"
+    assert stages[1] == 1, f"node1 应为 WARMING，实际{stages[1]}"
+    assert stages[2] == 3, f"node2 应为 MATURE，实际{stages[2]}"
+    assert stages[4] == 4, f"node4 应为 DORMANT（很久没被选中），实际{stages[4]}"
+    # plastic decay：NEW(0.98) 应衰减最少，MATURE(0.85) 应显著低于 NEW、DORMANT 应极低
+    p0 = m.plastic[0].abs().mean().item()
+    p2 = m.plastic[2].abs().mean().item()
+    assert p2 < p0, f"MATURE plastic 应低于 NEW（{p2:.3f} vs {p0:.3f}）"
+
+
 def test_v05_specialization_matrix():
     """v0.5 Node Specialization Matrix：行归一化频率矩阵 + 行余弦（模块分化判据）。
     理想分化：A/A2 高相似，A/B 低相似。

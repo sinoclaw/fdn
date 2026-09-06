@@ -50,6 +50,9 @@ class FDN(nn.Module):
         self.register_buffer("maturity", torch.zeros(0))            # (n,) ∈[0,1] 成熟度
         self.register_buffer("competence", torch.zeros(0))          # (n,) 能力/competence 分（usage↑ loss↓ entropy↓ 触发）
         self.register_buffer("node_epoch", torch.zeros(0, dtype=torch.long))  # 每 Node 经历 epoch 数
+        # v0.6 批次3：life_stage（5 态）——NEW(0)/WARMING(1)/LEARNING(2)/MATURE(3)/DORMANT(4)/REACTIVATED(5)
+        self.register_buffer("life_stage", torch.zeros(0, dtype=torch.long))
+        self.register_buffer("last_active_epoch", torch.zeros(0, dtype=torch.long))  # 最后一次被选中的 epoch（算 dormant）
         # v0.6：Node 级 novelty / error（批次1 纯测量——验证「现有 node 对 B 是否 competence 低」）
         # node_novelty = 1 - cos(q, k)（当前输入离该 node key 多新）；node_error = 该 node 输出的平均预测误差
         self.register_buffer("node_novelty", torch.zeros(0))        # (n,) EMA 新颖度（1-cos，越大越新）
@@ -59,6 +62,11 @@ class FDN(nn.Module):
         self.competence_lr = 0.3     # competence 更新率（v0.6：更快适应当前模式，避免 0.05 长期 EMA 稀释）
         self.mature_thr = 0.6         # 成熟阈值：maturity>thr -> MATURE（protected）
         self.mature_epochs = 2        # 至少经过 N 个 epoch 才可能成熟
+        # v0.6 批次3：Plasticity Decay 5 态参数（GPT：年轻高可塑/成熟低可塑/休眠极低/再激活临时高）
+        self.dormant_epochs = 6       # 连续 N epoch 未被选中 → DORMANT（极低可塑）
+        # 各态可塑衰减乘子（plastic 每次 update_lifecycle 乘该系数；>1 临时提升可塑）
+        self.plastic_decay_map = {"NEW": 0.98, "WARMING": 0.95, "LEARNING": 0.90,
+                                  "MATURE": 0.85, "DORMANT": 0.98, "REACTIVATED": 1.15}
 
         # —— FDN-v0.4：任务亲和约束（per-task 专属 Node 组，强制不相交）——
         # 每个 Node 记录归属任务 task_owner（-1=未归属/通用）。当前任务查询只能路由到
@@ -104,6 +112,9 @@ class FDN(nn.Module):
         self.maturity = torch.cat([self.maturity, torch.zeros(1)], dim=0)
         self.competence = torch.cat([self.competence, torch.zeros(1)], dim=0)
         self.node_epoch = torch.cat([self.node_epoch, torch.zeros(1, dtype=torch.long)], dim=0)
+        # v0.6 批次3：新 Node 从 NEW 起步（高可塑），last_active=当前 epoch
+        self.life_stage = torch.cat([self.life_stage, torch.zeros(1, dtype=torch.long)], dim=0)
+        self.last_active_epoch = torch.cat([self.last_active_epoch, torch.zeros(1, dtype=torch.long)], dim=0)
         # v0.6：新 Node 的 novelty / error 初始为 0（由 forward 选中时用 EMA 更新）
         self.node_novelty = torch.cat([self.node_novelty, torch.zeros(1)], dim=0)
         self.node_error = torch.cat([self.node_error, torch.zeros(1)], dim=0)
@@ -128,6 +139,8 @@ class FDN(nn.Module):
     def _mark_used(self, sel):
         for ni in sel:
             self.usage[ni] = self.usage[ni] + 1
+            if self.last_active_epoch.numel() > ni:
+                self.last_active_epoch[ni] = self.node_epoch[ni] if self.node_epoch.numel() > ni else 0
 
     def forward(self, x, reset=False):
         """x:(B,DIM)。返回 out:(B,1) 与 info(激活 Node 索引/k/难度/记忆检索量)。"""
@@ -273,8 +286,31 @@ class FDN(nn.Module):
         mature_boost = (self.node_epoch.float() >= self.mature_epochs).float()
         self.maturity = torch.clamp(
             self.maturity + self.competence * 0.15 + mature_boost * 0.05, 0.0, 1.0)
-        mature = (self.maturity >= self.mature_thr).float().unsqueeze(-1).expand_as(self.plastic)
-        self.plastic = self.plastic * (1.0 - 0.1 * mature)   # 成熟 Node 逐步锁死可塑
+        # v0.6 批次3：Plasticity Decay 5 态状态机（GPT 生命周期）。分级塑衰减替代原来单一 mature×0.1。
+        # NEW(0)/WARMING(1)/LEARNING(2)/MATURE(3)/DORMANT(4)/REACTIVATED(5)
+        if self.life_stage.numel() != self.maturity.numel():
+            self.life_stage = torch.zeros(self.maturity.numel(), dtype=torch.long, device=device)
+        mature = (self.maturity >= self.mature_thr).float()
+        stage_names = ["NEW", "WARMING", "LEARNING", "MATURE", "DORMANT", "REACTIVATED"]
+        # 未成熟且刚被选中（usage>0 且 node_epoch<成熟）→ WARMING/LEARNING；成熟 → MATURE
+        mature_idx = (mature > 0)
+        # dormant：成熟但很久未被选中（node_epoch - last_active_epoch > dormant_epochs）
+        inactive = (self.node_epoch.float() - self.last_active_epoch.float()) > self.dormant_epochs
+        # 重建 stage：0=NEW,1=WARMING,2=LEARNING,3=MATURE,4=DORMANT,5=REACTIVATED
+        new_stage = torch.zeros_like(self.maturity, dtype=torch.long)
+        # 简化 5 态映射：node_epoch<1=NEW；node_epoch<2=WARMING；其余未成熟=LEARNING；成熟且 inactive=DORMANT；成熟=MATURE
+        new_stage[(self.node_epoch.float() >= 1) & (self.node_epoch.float() < 2)] = 1
+        new_stage[(self.node_epoch.float() >= 2) & (~mature_idx)] = 2
+        new_stage[(mature_idx & ~inactive)] = 3
+        new_stage[(mature_idx & inactive)] = 4
+        self.life_stage = new_stage
+        # 按当前 life_stage 分级衰减 plastic（REACTIVATED 无显式态，仅靠 maturity 峰值时临时提升）
+        dec = torch.zeros_like(self.maturity)
+        for stage, name in enumerate(stage_names):
+            if name in self.plastic_decay_map:
+                dec[(self.life_stage == stage)] = self.plastic_decay_map[name]
+        dec = dec.unsqueeze(-1).expand_as(self.plastic)
+        self.plastic = self.plastic * dec
 
     def tick_epoch(self):
         """每个 epoch 结束调用：node_epoch += 1。"""
@@ -338,6 +374,8 @@ class FDN(nn.Module):
             d["maturity"] = [round(float(v), 3) for v in self.maturity.detach().cpu().tolist()]
         if self.usage.numel() > 0:
             d["usage"] = [float(v) for v in self.usage.detach().cpu().tolist()]
+        if self.life_stage.numel() > 0:
+            d["life_stage"] = [int(v) for v in self.life_stage.detach().cpu().tolist()]
         return d
 
     def key_cosine(self):
