@@ -50,6 +50,12 @@ class FDN(nn.Module):
         self.register_buffer("maturity", torch.zeros(0))            # (n,) ∈[0,1] 成熟度
         self.register_buffer("competence", torch.zeros(0))          # (n,) 能力/competence 分（usage↑ loss↓ entropy↓ 触发）
         self.register_buffer("node_epoch", torch.zeros(0, dtype=torch.long))  # 每 Node 经历 epoch 数
+        # v0.6：Node 级 novelty / error（批次1 纯测量——验证「现有 node 对 B 是否 competence 低」）
+        # node_novelty = 1 - cos(q, k)（当前输入离该 node key 多新）；node_error = 该 node 输出的平均预测误差
+        self.register_buffer("node_novelty", torch.zeros(0))        # (n,) EMA 新颖度（1-cos，越大越新）
+        self.register_buffer("node_error", torch.zeros(0))          # (n,) EMA 预测误差（越大越差）
+        self.novelty_ema = 0.5       # node_novelty EMA 更新率
+        self.error_ema = 0.3         # node_error EMA 更新率
         self.mature_thr = 0.6         # 成熟阈值：maturity>thr -> MATURE（protected）
         self.mature_epochs = 2        # 至少经过 N 个 epoch 才可能成熟
         self.competence_lr = 0.05     # competence 更新率
@@ -98,6 +104,9 @@ class FDN(nn.Module):
         self.maturity = torch.cat([self.maturity, torch.zeros(1)], dim=0)
         self.competence = torch.cat([self.competence, torch.zeros(1)], dim=0)
         self.node_epoch = torch.cat([self.node_epoch, torch.zeros(1, dtype=torch.long)], dim=0)
+        # v0.6：新 Node 的 novelty / error 初始为 0（由 forward 选中时用 EMA 更新）
+        self.node_novelty = torch.cat([self.node_novelty, torch.zeros(1)], dim=0)
+        self.node_error = torch.cat([self.node_error, torch.zeros(1)], dim=0)
         # v0.4：新 Node 归属当前任务（-1=未归属/通用，由 run_one 在任务边界 spawn 时设 current_task）
         owner = torch.tensor([self.current_task], dtype=torch.long)
         self.task_owner = torch.cat([self.task_owner, owner], dim=0)
@@ -185,6 +194,16 @@ class FDN(nn.Module):
                 h_old = self.h[ni].detach().clone()                 # 复制成独立张量，避免被后续 inplace 写入污染梯度
                 h_new, out_i = self.nodes[ni](h_old.unsqueeze(0), x[b:b+1])
                 self.h[ni] = h_new.squeeze(0).detach()
+                # v0.6（批次1 纯测量）：更新被选 Node 的 novelty（1-cos(q,key)）与 error 代理（out 与当前贡献差）
+                if self.node_novelty.numel() > ni:
+                    qn = q[b:b+1].float()
+                    kn = self.node_keys[ni].float()
+                    cos_ = torch.dot(qn[0], kn) / ((qn.norm() * kn.norm()) + 1e-8)
+                    nov = float(1.0 - cos_)
+                    self.node_novelty[ni] = (1 - self.novelty_ema) * self.node_novelty[ni] + self.novelty_ema * nov
+                    # error 代理：该 node 输出与 batch 内该样本聚合贡献的偏差幅度（无真 y 下的可测代理）
+                    err_proxy = float((out_i.squeeze(0) - contrib).abs()) if contrib is not None else float(out_i.squeeze(0).abs())
+                    self.node_error[ni] = (1 - self.error_ema) * self.node_error[ni] + self.error_ema * err_proxy
                 if self.use_plasticity:
                     # 可塑权重（推理期 ΔW）：Hebbian 局部更新，带上限+衰减
                     self._plastic_update(ni, h_new.squeeze(0), out_i.squeeze(0),
@@ -226,24 +245,34 @@ class FDN(nn.Module):
         return allow
 
     # —— FDN-v0.3：Competence Lock（B）+ Re-activation（C）——
-    def update_lifecycle(self, loss, entropy):
+    def update_lifecycle(self, loss, entropy, node_err=None):
         """训练后调用。按 competence 信号更新每 Node maturity（Competence Lock）。
-        loss 越小、usage 越高、路由熵越低 -> competence↑ -> maturity 升向 MATURE，plasticity 随之衰减。
+        v0.6：competence 改为「该 node 最近预测误差的倒数」驱动（node_error 越大 → competence 越低，
+        即该 node 对当前输入模式外行 = competence gap 高）——这才是 GPT 指的正确信号源。
+        之前用 usage_share+全局熵，在未选中 node 上恒 0（competence 死掉），不能反映 competence gap。
         """
         if self.maturity.numel() == 0:
             return
         device = self.maturity.device
-        # per-node competence 信号：用本 batch 的路由熵（越低越"确认"）+ 使用占比（越高越"成熟"）
-        usage_share = (self.usage.float() + 1e-8) / (self.usage.float().sum() + 1e-8)
-        competence_signal = (1.0 - max(0.0, float(entropy))) * (usage_share * 4.0)  # (n,)
-        competence_signal = torch.clamp(torch.as_tensor(competence_signal, device=device), 0.0, 1.0)
-        # 在线更新 competence（EMA）
+        if node_err is None or self.node_error.numel() == 0:
+            # 回退：v0.3 逻辑（无 node_error 时）
+            usage_share = (self.usage.float() + 1e-8) / (self.usage.float().sum() + 1e-8)
+            competence_signal = (1.0 - max(0.0, float(entropy))) * (usage_share * 4.0)
+            competence_signal = torch.clamp(torch.as_tensor(competence_signal, device=device), 0.0, 1.0)
+        else:
+            # v0.6：competence = 归一化 error 的倒数。error 越小 → competence 越高（越能胜任当前模式）。
+            # 关键修正：只用「被使用过(usage>0)」的 node 算（未使用的 node error=0 会被误判为金牌，须置中性）。
+            err = self.node_error.float()
+            used = (self.usage.float() > 0).float()
+            # 未使用 node（usage==0）→ 中性 0.5；使用中 node → 归一化 error 倒数
+            err_n = err / (err.max() + 1e-8)                # 归一化 [0,1]
+            inv = (1.0 - err_n)                              # error 越小 → inv 越大
+            competence_signal = torch.where(used > 0, torch.clamp(inv, 0.0, 1.0),
+                                            torch.full_like(inv, 0.5))
         self.competence = self.competence * (1 - self.competence_lr) + competence_signal * self.competence_lr
-        # maturity 随 competence + node_epoch 上升（加速到 MATURE，保证任务内能成熟）
         mature_boost = (self.node_epoch.float() >= self.mature_epochs).float()
         self.maturity = torch.clamp(
             self.maturity + self.competence * 0.15 + mature_boost * 0.05, 0.0, 1.0)
-        # Competence Lock：成熟 Node 的可塑向量衰减（plasticity ↓ -> protected）
         mature = (self.maturity >= self.mature_thr).float().unsqueeze(-1).expand_as(self.plastic)
         self.plastic = self.plastic * (1.0 - 0.1 * mature)   # 成熟 Node 逐步锁死可塑
 
@@ -296,6 +325,20 @@ class FDN(nn.Module):
         """返回编号为 ni 的 Node 的参数字典（供 add_param_group 用，保留旧优化器状态）。"""
         params = list(self.nodes[ni].parameters()) + [self.node_keys[ni]]
         return params
+
+    def node_telemetry(self):
+        """v0.6：返回每 Node 的 novelty/error/competence/usage/maturity 快照（诊断用）。"""
+        d = {}
+        if self.node_novelty.numel() > 0:
+            d["novelty"] = [round(float(v), 3) for v in self.node_novelty.detach().cpu().tolist()]
+            d["error"] = [round(float(v), 3) for v in self.node_error.detach().cpu().tolist()]
+        if self.competence.numel() > 0:
+            d["competence"] = [round(float(v), 3) for v in self.competence.detach().cpu().tolist()]
+        if self.maturity.numel() > 0:
+            d["maturity"] = [round(float(v), 3) for v in self.maturity.detach().cpu().tolist()]
+        if self.usage.numel() > 0:
+            d["usage"] = [float(v) for v in self.usage.detach().cpu().tolist()]
+        return d
 
     def key_cosine(self):
         """所有活跃 Node key 两两余弦（用于 merge 判据）。"""

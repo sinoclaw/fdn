@@ -127,7 +127,9 @@ def train_task(model, x, y, optimizer, epochs, bs, dynamic, use_lifecycle=False)
         # —— v0.3 Competence Lock：每 epoch 结束按 loss/entropy/usage 更新每 Node maturity ——
         if use_lifecycle and hasattr(model, "update_lifecycle"):
             avg_loss = task_loss_sum / max(1, nbatch)
-            model.update_lifecycle(avg_loss, last_entropy)
+            # v0.6：传 node_error（真实预测误差）驱动 competence（GPT：competence gap 是本 batch 内 node 误差信号）
+            node_err = getattr(model, "node_error", None)
+            model.update_lifecycle(avg_loss, last_entropy, node_err=node_err)
             model.tick_epoch()
 
 
@@ -251,6 +253,10 @@ def run_one(name, seq, cfg, seed):
         rec["usage"] = [float(v) for v in model.usage.detach().cpu().tolist()]
     else:
         rec["final_nodes"] = len(model.nodes) if hasattr(model, "nodes") else 1
+
+    # v0.6：Node 级 telemetry（novelty/error/competence/maturity）——诊断「现有 node 对 B 是否 competence 低」
+    if dynamic and hasattr(model, "node_telemetry"):
+        rec["node_telemetry"] = model.node_telemetry()
 
     rec["timeline"] = timeline
     rec["final_acc"] = timeline[-1]["acc"]

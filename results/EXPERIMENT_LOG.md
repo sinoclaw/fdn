@@ -290,4 +290,21 @@ GPT v0.5 裁定关键：先多 seed 验证 w=0.5（至少 5 次），若 A_end>0
 - `tests/test_fdn.py`：+`test_v05_specialization_matrix`（理想分化 A/A2 高相似、A/B 低相似）——17/17 全绿。
 - **探针验证**（equi 短跑）：A~D_sub cos=0.984、A~B cos=0.934——**所有任务行高相似（分化弱）**，与批次 1 disjoint=0 同根因。
 
+## 2026-09-06 FDN-v0.6 批次 1：Node 级 competence/novelty 状态落地（纯测量）
+
+依据 GPT 二审判定（docs/GPT_AUDIT_V05.md）：v0.6 = Node autonomous specialization（Novelty-Spawn + Node Competence + Plasticity Decay）。批次 1 只做纯测量——验证「现有 node 对 B 是否 competence 低」。
+
+改动（model/fdn.py + experiments/continual.py，均为加法，不改路由）：
+- +`node_novelty`（1-cos(q,key)）与 `node_error`（该 node 输出与聚合贡献之差的 EMA）两个 buffer；在 forward 选中 node 时更新。
+- +`node_telemetry()`（返回 novelty/error/competence/maturity/usage 快照）写入 summary。
+- **修 `update_lifecycle` competence 信号源**：原来用 `usage_share × (1-全局熵)`，在未选中 node 上恒 0（competence 死掉）→ 改为「归一化 error 的倒数」驱动（error 越大 → competence 越低 = competence gap 高）。并修正「未使用 node error=0 被误判为金牌」陷阱（置中性 0.5）。
+
+**批次 1 关键发现（探针 seed0, 14ep, core）**：
+- **competence 现在能正确反映 node 胜任度**：node8（error=109）competence=0.36（低=gap 高）；node0/5/6（error<2.7）competence=0.87-0.89（高=胜任）。
+- **方向验证通过**：高误差 node 展现低 competence——正是 GPT 要的 spawn 判据信号源。
+- 之前 competence 恒 0 是纯 bug（usage_share×entropy 在未选中 node 上归零 + clamp），已修。
+
+**结论**：批次 1 达成——Node 级 competence/novelty 落在原地且能正确反映胜任度。下一步（批次 2）用「所有激活 node 的 competence 都低 + novelty 高」作为 Node 级 spawn 判据。
+> 产物：`/tmp/probe_v06.json`（临时）。测试 17/17 全绿。
+
 
