@@ -551,6 +551,26 @@ v3 已证 FastWeights（每能力独立路径）正解。本步升级为**自组
 
 > 产物：`/tmp/probe_bdh_pool.py`、`/tmp/probe_bdh_pool2.py`（临时）。
 
+## 2026-09-06 自组织能力拆分诊断：架构能拆，但软路由懒（MoE 懒路由）
+
+换「需要不同计算通路」的混合条件任务（z=0→add, z=1→mul），FastWeights 双 cap 池 + Router 按 z 路由，测能否自发拆分（/tmp/probe_bdh_split.py, /tmp/probe_bdh_split2.py）。
+
+| 配置 | acc_all | z0_acc | z1_acc | route_z0→cap0 | 交叉专化 |
+|---|---|---|---|---|---|
+| (a) FastWeights+Router 软路由 | 1.000 | 1.0 | 1.0 | **0.0** | — |
+| (b) 强制正确路由（upper bound）| — | cap0@z0=1.0 | cap1@z1=1.0 | 1.0 | cap0@z1=0.06, cap1@z0=0.00 |
+| (c) 单 MLP baseline | 1.000 | 1.0 | 1.0 | — | — |
+
+### 结论（诚实）
+1. **架构能拆分**：强制正确路由时 cap0 成纯 add 专家（z0=1.0）、cap1 成纯 mul 专家（z1=1.0），**交叉≈0**（cap0@z1=0.06、cap1@z0=0.00）——FastWeights 完全有能力形成纯净专家。
+2. **但软路由懒**：软路由下 acc_all 已 =1.0（软权重混合已通吃），**Router 无激励去硬拆分**（route_z0→cap0=0.0）——正是 MoE 的**懒路由/router entropy collapse** 问题。
+3. **需激励**：让 Router "愿意拆"，需 load-balancing / hard 路由等**激励 Router 均匀分配**的机制（工业 MoE 同理）。
+
+### 定性
+FastWeights 结构正解已确立（v3：A/B/A' 全 1.0 + A_forget=0）。自组织"按需拆能力"**架构上可行**（b 上限，纯专家+零交叉），但**软路由默认不拆**（需激励）。下一步方向 = **给 FastWeights 池加"拆分激励"**（load-balance 均匀分配 / hard 路由），促 Router 自发拆成专家。
+
+> 产物：`/tmp/probe_bdh_split.py`、`/tmp/probe_bdh_split2.py`（临时）。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
