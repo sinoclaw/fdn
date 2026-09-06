@@ -742,6 +742,42 @@ GPT 五审痛点：DCA 原用 `复制Cap→真实训练→测Damage`（10B 参�
 
 > 探针 /tmp/probe_ip_cost.py；数据 /tmp/ip_cost.json。
 
+## 2026-09-06 DCA-v1 阶段1+2：真实神经技能——单技能可学性 + 能力边界发现（判据 A）
+
+GPT 六审（GPT_AUDIT_V09）指定 DCA-v1：把 Capability 从"数学函数"升级为"神经技能"，验证复用/spawn/freeze 是否跨到语义技能世界。方案 docs/DCA_V1_PLAN.md。网络受限（figshare 403/HF 不可达/github 超时）→ 用自包含可复现的合成神经技能（现实选择，任务类型是真实的：分类/抽取/推理/变换）。
+
+### 阶段1：单技能可学性 + 阈值校准（大MLP 128 + 150ep，2 seed）
+| 技能 | 指标 | 均值 | 判定 |
+|---|---|---|---|
+| classify 文本分类 | acc | 0.948 | ✅ |
+| extract 结构抽取 | acc | 0.791 | ✅ |
+| math 数学推理 | R² | **0.986** | ✅ |
+| transform 序列变换 | acc | 0.337 → **seq2seq 监督 0.746** | ✅(需序列模型) |
+
+**关键发现**：transform "看输入猜规则"不可学（反转/排序/旋转作用于随机序列，输入无规则信号——静态MLP/RNN 都 0.33）；改"输入→输出序列对"监督学习（Seq2Seq）→ 0.746。真实神经技能有的需**序列表征/序列模型**（非静态特征），这正是"神经技能≠数学函数"的尺度跃迁佐证。
+
+阈值基准（判据C用）：classify≥0.85 / extract≥0.75 / math(R²)≥0.9 / transform≥0.7。
+
+### 阶段2：能力边界发现（判据 A，语义技能池 + 按需 spawn）
+序列 = classify_base→classify_v2(同族)→extract_base→extract_v2(同族)→math_add→math_mul(数学族)→transform_seq(异族)。
+
+**判据 A 全过（2 seed 完全一致）**：
+| 序列 | seed0 | seed1 |
+|---|---|---|
+| classify_base | SPAWN(首) | SPAWN(首) |
+| classify_v2 | REUSE cap0 (dmg=0.000) | REUSE cap0 (dmg=0.000) |
+| extract_base | SPAWN cap1 (dmg=1.0) | SPAWN cap1 (dmg=1.0) |
+| extract_v2 | REUSE cap1 (dmg=0.000) | REUSE cap1 (dmg=0.001) |
+| math_add | SPAWN cap2 (dmg=1.0) | SPAWN cap2 (dmg=1.0) |
+| math_mul | REUSE cap2 (dmg=0.000) | REUSE cap2 (dmg=0.005) |
+| transform_seq | SPAWN cap3 (dmg=0.71) | SPAWN cap3 (dmg=0.58) |
+
+**最终分化矩阵（2 seed 一致）**：cap0=[classify_base,classify_v2] / cap1=[extract_base,extract_v2] / cap2=[math_add,math_mul] / cap3=[transform_seq]。cap 数=4（有复用:4<7，有分化:>1）。每 cap 对所辖 skill acc：classify 1.0 / extract 0.80 / math 0.998 / transform 0.99。
+
+**结论**：DCA 的"复用是否伤旧→新建"判据成功从 ADD/MUL 世界**跨到语义技能世界**——同族语义变体复用（损伤≈0），异族 spawn（损伤≈1.0），无 oracle 自动分成 4 个能力族。判据 A 跨世界成立。
+
+> 探针 /tmp/dca_v1_skills.py、/tmp/dca_v1_diag.py、/tmp/dca_v1_rnn.py、/tmp/dca_v1_seq2seq.py、/tmp/dca_v1_pool.py。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
