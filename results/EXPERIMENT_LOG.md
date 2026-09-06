@@ -818,6 +818,24 @@ GPT 六审（GPT_AUDIT_V09）指定 DCA-v1：把 Capability 从"数学函数"升
 
 > 探针 /tmp/dca_v1_ip.py、/tmp/dca_v1_ip2.py、/tmp/dca_v1_ip3.py、/tmp/dca_v1_continual.py。
 
+## 2026-09-06 DCA-v2 启动：真实数据（MNIST）阶段1 —— 技能可学性 + 阈值校准
+
+GPT 七审（GPT_AUDIT_V10）指明 DCA-v2：真实数据 + 稍大神经基座。环境实测：无 GPU（8核CPU/16G），网络受限（github/HF 不可达）但 **pytorch 官方源可达**（MNIST/FashionMNIST S3 200）。FashionMNIST 下载慢（网络限速），务实改用**纯 MNIST**（已完整下载 60000+10000）。方案 docs/DCA_V2_PLAN.md。
+
+### 阶段1：纯 MNIST 5 个真实神经技能可学性（小型 CNN，2 seed）
+| 技能 | acc 均值 | n_class | 判定 |
+|---|---|---|---|
+| mnist_digit 数字分类 | 0.976 | 10 | ✅ |
+| mnist_parity 奇偶二分类 | 0.975 | 2 | ✅ |
+| mnist_rot90 旋转90° | 0.978 | 10 | ✅ |
+| mnist_invert 反色 | 0.974 | 10 | ✅ |
+| mnist_thresh 阈值二分类 | 0.962 | 2 | ✅ |
+
+**全部可学（≥0.96），无"学不会"意外**。rot90/invert 增强视角也学会（CNN 有基础不变性）。
+阈值基准（判据C用）：全部 ≥0.96。
+
+> 探针 /tmp/dca_v2_phase1.py。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
