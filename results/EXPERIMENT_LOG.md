@@ -352,6 +352,35 @@ GPT 指出的本质缺口：Plasticity Decay 只保护 Hebbian 推理期，不�
 | A_curve 起点 | 0.123 | **0.021** |
 
 **结论**：freeze 救不了"没学会"。多 seed 验证是必须的（单 seed/短跑都不可信，v0.5 教训）。freeze_count 正常（B_mul:11, A2_add:9）。
+
+## 2026-09-06 FDN-v0.7（GPT 三审）：competence-gated warm-up + 关键基线对账（架构级根因）
+
+GPT 三审裁定：v0.6 未实现 Node autonomous specialization，根因是"A 没学会 → 无 stable competence → signal 不可靠 → spawn 无归属"。给 v0.7 = Warm-up → Mature → Protected → Novelty Spawn，用 competence（accuracy+entropy+连续N次稳定）当验收门槛（非 epoch）。
+
+### 实现（代码 19/19 全绿）
+- `model/fdn.py`：+warm_active/warm_temperature/warm_curve 状态；+`update_curriculum(acc, entropy)`（competence-gated 收敛判定）；forward 加 soft→hard 课程分支（warm_active 时全班 soft 路由）。
+- `experiments/continual.py`：+`_quick_eval`（每 epoch 测当前任务 acc+entropy）；+`--profile v07`；train_task +gated_warmup。
+
+### 关键 bug 修复（诚实记录）
+1. **旧代码 warm-up 是空壳**：`warmup_steps` 参数存在但 forward 里只有 per-node warm（未成熟 node 门控放大），无"全班 soft→hard 课程"——v0.6 里 `warmup_steps=0` 更是全程 hard。**这解释为什么 v0.6 的 A 学不会**。
+2. **entropy 恒 0**：`info["entropy"] = entropy if self.training else 0.0`，eval 时恒 0 → curriculum 永远不达标。已改为恒记录真实 entropy。
+3. **评估口径不一致**：soft 分支原 `if warm_active and self.training`，eval 走 hard → Router 没学会时 hard 评估是冷启动。改为 `if warm_active`（训练+评估一致）。
+
+### 单任务基线对账（决定性发现，/tmp/probe_baseline.py）
+| 模型 | 单任务 A accuracy | 解读 |
+|---|---|---|
+| StaticMLP（共享网络） | **1.000** | A 任务**极好学**，上限 1.0，GPT 判据合理 |
+| StaticMoE n=12 k=3 | **0.072** | 路由模块化（固定结构）**反而学不会**！ |
+| StaticMoE n=12 k=5 | **0.049** | 同上 |
+| StaticMoE n=24 k=5 | **0.051** | 同上 |
+| StaticMoE n=12 k=8 | **0.055** | 同上 |
+
+### 核心结论（架构级根因，扭转认知）
+**A 任务本身可学到 1.0（StaticMLP 完美学会），但连 StaticMoE（静态、固定结构、无任何动态/干扰）单任务 A 都学不会（0.05-0.07）。** 这彻底证明：**问题不在 FDN 的动态机制（spawn/warm-up/plasticity/freeze），而在 MoE 路由架构的 top-k 门控优化本身**——top-k argmax 是离散不可导的，只有被选中 node 拿梯度，Router 得不到正确梯度信号。
+
+**与 v0.1 结论完全印证**："失败更可能源于逐样本 top-k 门控路由优化的本身脆弱而非仅结构震荡"。这是 FDN 系列的**最底层根因**——不解决 top-k 路由可导性，任何外层机制（warm-up/spawn/分化）都救不了。
+
+> 产物：`/tmp/probe_baseline.py`、`/tmp/probe_v07*.json`、`/tmp/diag_soft.py`（临时）。
 > 产物：`/tmp/probe_v06e.json`（临时）。测试 19/19。
 
 ## 2026-09-06 FDN-v0.6 批次 3：Plasticity Decay 5 态

@@ -19,7 +19,8 @@ class FDN(nn.Module):
                  memory_max=256, plastic_lr=1e-3, plastic_cap=0.1, plastic_decay=0.98,
                  use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
                  warmup_steps=0, warm_temp=3.0, task_constraint=False,
-                 n_tasks=4, soft_task_bias=0.0):
+                 n_tasks=4, soft_task_bias=0.0, gated_warmup=False,
+                 warm_acc_thr=0.7, warm_ent_thr=0.35, warm_stable_need=3):
         super().__init__()
         self.dim, self.hidden, self.r = dim, hidden, r
         self.base_k, self.kmin, self.kmax, self.ent_scale = base_k, kmin, kmax, ent_scale
@@ -29,11 +30,24 @@ class FDN(nn.Module):
         self.dynamic_tau = dynamic_tau
         self.dynamic_k = dynamic_k
         # Router warm-up + soft→hard curriculum（破「路由鸡生蛋」）
-        # warmup_steps>0 时：前 warmup_steps 次训练前向用「全班 soft 路由」（温度从 warm_temp 指数退火到近似 hard），
-        # 让每个 Node 都拿到梯度、Router 学到任务亲和；达到 warmup_steps 后切回 hard top-k。
+        # v0.7（GPT 三审）：competence-gated warm-up。不再用固定 epoch 数切 hard，
+        # 而是「soft 路由持续，直到 A 的 accuracy + routing entropy 双门槛达标 + 连续 N 次稳定」才切 hard/MATURE。
         self.warmup_steps = warmup_steps
         self.warm_temp = warm_temp
         self.step = 0
+        # v0.7 competence-gated warm-up 状态（仅 gated_warmup=True 时启用；否则保持 v0.6/v03 的 hard 路由行为）
+        self.warm_active = gated_warmup     # True=当前任务仍在 soft warm-up（全班 soft 路由）
+        self.warm_temperature = warm_temp  # 当前 soft 温度（达标后逐渐退火）
+        self.warm_min_temp = 1.0           # 退火下限（≈hard）
+        self.warm_anneal = 0.02            # 每 epoch 温度衰减
+        self.warm_stable_count = 0         # 连续达标次数（须 ≥ warm_stable_need 才切 hard）
+        self.warm_stable_need = 3          # 连续 N 次达标才确认 MATURE（GPT：连续 N 次稳定）
+        self.warm_curve = []               # 每次评估记录 (acc, entropy) 诊断
+        self.curriculum_converged = False  # 当前任务已收敛（切 hard / 标记 MATURE）
+        self.gated_warmup = gated_warmup   # v0.7：是否启用 competence-gated warm-up
+        self.warm_acc_thr = warm_acc_thr   # GPT：A_accuracy 门槛（达标需 ≥ 此值）
+        self.warm_ent_thr = warm_ent_thr   # GPT：routing entropy 门槛（达标需 ≤ 此值）
+        self.warm_stable_need = max(1, int(warm_stable_need))
 
         self.q = nn.Linear(dim, r)                 # 任务查询向量
         self.nodes = nn.ModuleList()               # 动态 Node 列表（可 spawn 生长）
@@ -168,31 +182,47 @@ class FDN(nn.Module):
                 # 可路由 Node 数受 task mask 限制：k 不得超过「与当前任务亲和可用的 Node 数」
                 allow_count = int(tm.sum().item())
 
-        # —— FDN-v0.3：Protected Expert Routing ——
-        # 不再做「全班 soft」（v0.2-C 错在让所有 Node 共享梯度）。改做 per-node 保护：
-        #   * 未成熟 Node（maturity<thr）-> "warm"：在 top-k 内对其 gate 做 soft 放大（高门控、独立吸收梯度）
-        #   * 成熟 Node -> protected：标准 hard gate（top-k softmax），不受后续任务拉宽
-        k = self.base_k if not self.dynamic_k else self._dynamic_k(x, scores)  # 但 scores 可能含 -1e9（task mask/archived）
-        if tm is not None:
-            k = min(k, allow_count)
-        k = max(1, min(k, scores.size(-1)))   # 防御：k 至少为 1、不超 Node 数
-        top = torch.topk(scores, k, dim=-1)                                # (B,k)
-        idx = top.indices                                                  # (B,k)
-        gate = torch.softmax(top.values, dim=-1)                           # (B,k)
-
-        # per-node warm 掩码（训练时生效）：未成熟 Node 的门控放大 alpha
-        if self.training and hasattr(self, "maturity") and self.maturity.numel() > 0:
-            sel_nodes = idx                                            # (B,k)
-            mat = self.maturity[sel_nodes.clamp(max=self.maturity.numel()-1)]  # (B,k) 每选中 Node 的成熟度
-            warm_mask = (mat < self.mature_thr).float()                # 1=未成熟(warm)
-            # 未成熟 Node 门控放大到 alpha（≥1），成熟 Node 保持 1.0
-            alpha = 1.0 + (self.warm_temp - 1.0) * warm_mask
-            gate = gate * alpha
-            gate = gate / (gate.sum(dim=-1, keepdim=True) + 1e-8)      # 归一化（保贡献总量）
-
-        # 路由熵（用于 Competence Lock / dynamic k 的合法性检查）
-        pp = torch.softmax(scores, dim=-1)
-        entropy = float(-(pp * torch.log(pp + 1e-8)).sum(dim=-1).mean().item())
+        # —— FDN-v0.7：competence-gated warm-up（soft→hard 课程）——
+        # warm_active 时：全班 soft 路由（温度 warm_temperature，快速退火）。每个 Node 都拿到梯度、
+        # Router 学到任务亲和，打破「冷启动鸡生蛋」。达标后由 update_curriculum 关闭 warm_active 切 hard。
+        # 注意：训练和评估都要遵循 warm_active（若仅训练 soft、评估 hard，Router 没学会时 hard 评估必然是冷启动、acc 低，收敛永远不达标）。
+        if self.warm_active:
+            # 用温度退火的 softmax：warm_temperature 大=更 soft，收敛到 1.0≈hard
+            soft_scores = scores.float()
+            if self.warm_temperature > 1.0:
+                soft_scores = soft_scores / self.warm_temperature
+            # 屏蔽 archived（soft 也不路由到它们）
+            if self.archived:
+                soft_scores[:, list(self.archived)] = -1e9
+            pp = torch.softmax(soft_scores, dim=-1)         # (B,n) 全班 soft 概率（含梯度）
+            # 全部 Node 都参与（soft 路由），不 top-k 截断——让 Router + 所有 Node 一起学到任务
+            idx = torch.arange(scores.size(-1)).unsqueeze(0).expand(B, scores.size(-1)).contiguous()
+            gate = pp                                       # 门控 = soft 概率
+            k = min(scores.size(-1), self.base_k if not self.dynamic_k else scores.size(-1))
+            # 熵（诊断用）：soft 阶段熵往往较高
+            entropy = float(-(pp * torch.log(pp + 1e-8)).sum(dim=-1).mean().item())
+            has_soft_route = True
+        else:
+            # —— FDN-v0.3：Protected Expert Routing ——
+            # 每 node warm（未成熟高门控）/成熟 protected（hard），不再做全班 soft（v0.2-C 教训）
+            k = self.base_k if not self.dynamic_k else self._dynamic_k(x, scores)
+            if tm is not None:
+                k = min(k, allow_count)
+            k = max(1, min(k, scores.size(-1)))   # 防御：k 至少为 1、不超 Node 数
+            top = torch.topk(scores, k, dim=-1)                                # (B,k)
+            idx = top.indices                                                  # (B,k)
+            gate = torch.softmax(top.values, dim=-1)                           # (B,k)
+            # per-node warm 掩码（训练时生效）：未成熟 Node 的门控放大 alpha
+            if self.training and hasattr(self, "maturity") and self.maturity.numel() > 0:
+                sel_nodes = idx                                            # (B,k)
+                mat = self.maturity[sel_nodes.clamp(max=self.maturity.numel()-1)]  # (B,k) 每选中 Node 的成熟度
+                warm_mask = (mat < self.mature_thr).float()                # 1=未成熟(warm)
+                alpha = 1.0 + (self.warm_temp - 1.0) * warm_mask
+                gate = gate * alpha
+                gate = gate / (gate.sum(dim=-1, keepdim=True) + 1e-8)      # 归一化（保贡献总量）
+            pp = torch.softmax(scores, dim=-1)
+            entropy = float(-(pp * torch.log(pp + 1e-8)).sum(dim=-1).mean().item())
+            has_soft_route = False
 
         out_list = []
         mem_ret = self.memory.retrieve(q.detach()) if self.use_memory else torch.zeros(x.shape[0], 1)
@@ -228,9 +258,9 @@ class FDN(nn.Module):
         if self.use_memory:
             out = out + 0.1 * mem_ret.detach()
         info = {"idx": idx.cpu().numpy(), "k": k,
-                "n": len(self.nodes), "warmup": False,
+                "n": len(self.nodes), "warmup": self.warm_active,
                 "mem_keys": self.memory.size,
-                "entropy": entropy if self.training else 0.0}
+                "entropy": entropy}      # v0.7：评估也记录真实 entropy（原按 self.training 判断，eval 恒 0——导致 curriculum 永远不达标）
         if self.training:
             self.step += 1
         return out, info
@@ -246,6 +276,29 @@ class FDN(nn.Module):
     def set_task(self, task_id):
         """由 run_one/评估在任务边界注入当前任务 id。路由只允许「归属该任务的 Node + 未归属 Node」。"""
         self.current_task = int(task_id)
+
+    def update_curriculum(self, acc, entropy):
+        """v0.7：competence-gated warm-up 收敛判定（GPT：用 accuracy+entropy+连续N次稳定）。
+        关键：温度随时间自动退火（不依赖达标）——soft 阶段 A 学不快，若只达标才降温，会永远卡在高 soft。
+        达标（acc≥thr 且 entropy≤thr）→ 连续计数+1；连续 N 次 → 关 warm_active 切 hard。
+        返回 (converged, stable_count)。"""
+        acc_thr = getattr(self, "warm_acc_thr", 0.5)
+        ent_thr = getattr(self, "warm_ent_thr", 0.6)
+        self.warm_curve.append((round(float(acc), 3), round(float(entropy), 3)))
+        if len(self.warm_curve) > 60:
+            self.warm_curve = self.warm_curve[-60:]
+        ok = (float(acc) >= acc_thr) and (float(entropy) <= ent_thr)
+        if ok:
+            self.warm_stable_count += 1
+        else:
+            self.warm_stable_count = 0
+        # 温度随时间退火：每调用一次向 warm_min_temp 收敛（保证即使 acc 慢，soft 也会渐趋 hard）
+        self.warm_temperature = max(self.warm_min_temp,
+                                    self.warm_temperature - self.warm_anneal)
+        if self.warm_stable_count >= self.warm_stable_need:
+            self.warm_active = False
+            self.curriculum_converged = True
+        return (self.curriculum_converged, self.warm_stable_count)
 
     def _task_mask(self):
         """v0.4 隔离 mask：(n,) 逻辑值，True=允许当前任务路由。

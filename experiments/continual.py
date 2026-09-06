@@ -101,7 +101,17 @@ def ensure_task_nodes(model, task_id, cfg, seed, optimizer=None):
                     optimizer.add_param_group({"params": to_add})
 
 
-def train_task(model, x, y, optimizer, epochs, bs, dynamic, use_lifecycle=False):
+def _quick_eval(model, x, y):
+    """v0.7：快速评估当前任务的 accuracy + 路由 entropy，给 curriculum 收敛判定用。
+    直接在当前任务训练数据上测（evaluate_model 同口径：|pred-target|<=tol）。"""
+    import numpy as np
+    pred, info = predict(model, torch.from_numpy(x))
+    acc = M.accuracy(pred, y, T.TOL)
+    ent = info.get("entropy", 0.0) if isinstance(info, dict) and info else 0.0
+    return acc, ent
+
+
+def train_task(model, x, y, optimizer, epochs, bs, dynamic, use_lifecycle=False, gated_warmup=False):
     model.train()
     lossf = nn.MSELoss()
     for ep in range(epochs):
@@ -131,6 +141,12 @@ def train_task(model, x, y, optimizer, epochs, bs, dynamic, use_lifecycle=False)
             node_err = getattr(model, "node_error", None)
             model.update_lifecycle(avg_loss, last_entropy, node_err=node_err)
             model.tick_epoch()
+        # —— v0.7：competence-gated warm-up ——
+        # 若当前任务仍在 soft warm-up（warm_active），每 epoch 在训练集上快速评估 acc + entropy，
+        # 喂 update_curriculum；达标连续 N 次 → 关 warm_active（切 hard + MATURE），后续 epoch 走保护路由。
+        if gated_warmup and dynamic and getattr(model, "warm_active", False):
+            acc, ent = _quick_eval(model, x, y)
+            model.update_curriculum(acc, ent)
 
 
 def run_one(name, seq, cfg, seed):
@@ -155,7 +171,11 @@ def run_one(name, seq, cfg, seed):
                     dynamic_tau=cfg["dynamic_tau"], dynamic_k=cfg["dynamic_k"],
                     warmup_steps=cfg.get("warmup_steps", 0), warm_temp=cfg.get("warm_temp", 3.0),
                     task_constraint=cfg.get("task_constraint", False),
-                    n_tasks=cfg.get("n_tasks", 4), soft_task_bias=cfg.get("soft_task_bias", 0.0))
+                    n_tasks=cfg.get("n_tasks", 4), soft_task_bias=cfg.get("soft_task_bias", 0.0),
+                    gated_warmup=cfg.get("gated_warmup", False),
+                    warm_acc_thr=cfg.get("warm_acc_thr", 0.7),
+                    warm_ent_thr=cfg.get("warm_ent_thr", 0.35),
+                    warm_stable_need=cfg.get("warm_stable_need", 3))
         dynamic, controller = True, EvolutionController(
             spawn_cos_thr=cfg["spawn_cos_thr"], prune_usage_thr=cfg["prune_usage_thr"],
             merge_cos_thr=cfg["merge_cos_thr"], young_tasks=cfg["young_tasks"],
@@ -185,7 +205,8 @@ def run_one(name, seq, cfg, seed):
             rec.setdefault("freeze_count", []).append({"task": task, "frozen": nfroz})
         # v0.3：per-node protected routing（在 forward 内生效）+ Competence Lock（use_lifecycle）
         train_task(model, x, y, opt, cfg["epochs_per_task"], cfg["bs"], dynamic,
-                   use_lifecycle=cfg.get("use_lifecycle", False))
+                   use_lifecycle=cfg.get("use_lifecycle", False),
+                   gated_warmup=cfg.get("gated_warmup", False))
         # C. Re-activation：进入新任务前，先看哪些成熟 Node 与新任务亲和（复用而非重新 warm）
         rec.setdefault("reactivation", {})[task] = []
         if dynamic and hasattr(model, "reactivate_score"):
@@ -282,14 +303,14 @@ def main():
     ap.add_argument("--bs", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--run", default="all", choices=["all", "A", "B", "D", "C"])
-    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03", "v04", "v04lite", "v06"],
-                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation；v04=+硬隔离(已反证)；v04lite=+软任务亲和(soft task bias)；v06=Node autonomous specialization(Novelty-Spawn)")
+    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03", "v04", "v04lite", "v06", "v07"],
+                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation；v04=+硬隔离(已反证)；v04lite=+软任务亲和(soft task bias)；v06=Node autonomous specialization(Novelty-Spawn)；v07=Warm-up->Mature->Protected->Novelty Spawn(competence-gated)")
     ap.add_argument("--init_per_task", type=int, default=4,
                     help="v04：每个任务 spawn 的专属 Node 数（强制不相交路由）")
     ap.add_argument("--soft_task_bias", type=float, default=0.3,
                     help="v04lite：软任务亲和权重 w（q += w*task_emb[task]，不硬屏蔽）")
     ap.add_argument("--spawn_patience", type=int, default=2,
-                    help="v06：连续多少任务 competence_gap 持续高才 spawn（防噪声，默认2）")
+                    help="v06/v07：连续多少任务 competence_gap 持续高才 spawn（防噪声，默认2）")
     ap.add_argument("--freeze_old", action="store_true",
                     help="v06：任务边界冻结已成熟的旧 Node（防 Adam 覆盖旧能力——GPT 指出的本质缺口）")
     args = ap.parse_args()
@@ -380,6 +401,24 @@ def main():
                    use_node_spawn=True,          # Node 级 Novelty-Spawn 判据
                    spawn_patience=args.spawn_patience,
                    freeze_old=args.freeze_old)   # 可选：任务边界冻结旧 Node（防 Adam 覆盖，GPT 本质缺口）
+    elif args.profile == "v07":
+        # 团队 v0.7（GPT 三审指定）：Warm-up → Mature → Protected → Novelty Spawn。
+        # 关键升级：competence-gated warm-up——用 accuracy+entropy+连续N次稳定 当收敛门槛（不是固定 epoch）。
+        # 保留 v0.6 全机制（Node 级 spawn/Plasticity 5 态/freeze_old），但 warm_active 默认 True（soft→hard 课程）。
+        # GPT 明确：freeze_old 是承重件（保留），cos 指标不可单独证 specialization（本版先证「B 产生新 Node」）。
+        cfg.update(use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
+                   spawn_cos_thr=0.5, merge_cos_thr=0.9, prune_usage_thr=0.01,
+                   young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05,
+                   warmup_steps=0, warm_temp=3.0, use_lifecycle=True,
+                   task_constraint=False, n_tasks=len(T.CORE_SEQUENCE),
+                   soft_task_bias=0.0,
+                   use_node_spawn=True,
+                   spawn_patience=args.spawn_patience,
+                   gated_warmup=True,           # competence-gated warm-up（soft→hard，凭 acc+entropy 收敛）
+                   warm_acc_thr=0.5,            # GPT：A accuracy 达标门槛
+                   warm_ent_thr=0.6,            # GPT：routing entropy 达标上限
+                   warm_stable_need=3,          # 连续 N 次稳定才切 hard/MATURE
+                   freeze_old=True)             # 承重件：任务边界冻结旧 Node（GPT 确认保留）
     cfg["profile"] = args.profile
 
     runs = ["A", "B", "D", "C"] if args.run == "all" else [args.run]
