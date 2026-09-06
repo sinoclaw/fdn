@@ -836,6 +836,29 @@ GPT 七审（GPT_AUDIT_V10）指明 DCA-v2：真实数据 + 稍大神经基座�
 
 > 探针 /tmp/dca_v2_phase1.py。
 
+### DCA-v2 阶段2：能力边界发现（判据 A）—— MNIST 真实技能（诚实记录：部分达标 + 不稳定信号）
+
+用阶段1的5个真实技能（MNIST），动态池按需 spawn（复用是否伤旧判据，阈值0.15）。序列：mnist_digit→mnist_rot90→mnist_invert→mnist_parity→mnist_thresh。
+
+| seed | cap 数 | 分化矩阵 | digit 系复用? |
+|---|---|---|---|
+| 0 | 4 | {0:[digit,invert], 1:[rot90], 2:[parity], 3:[thresh]} | invert REUSE digit(部分) |
+| 1 | **5** | 全分开（无复用） | **无复用** |
+| 2 | 4 | {0:[digit,invert], 1:[rot90], 2:[parity], 3:[thresh]} | invert REUSE digit(部分) |
+
+**各技能 acc（跨seed）**：digit 0.935-0.978 / rot90 0.971-0.980 / invert 0.967-0.977 / parity 0.978-0.986 / thresh 0.946-0.968。
+
+**诚实拆解**：
+- ✅ **异族稳定 SPAWN**：parity/thresh（二分类）在3 seed 都新建 cap，与数字分类系稳定分离——DCA 能区分"数字识别" vs "非数字识别"。
+- ⚠️ **seed1 出现"全 SPAWN 无复用"**：invert vs digit 的损伤值在 0.15 阈值附近摆动，seed1 择 SPAWN，seed0/2 择 REUSE——跨 seed 不一致。
+- 💡 **关键机制发现（真实数据上的更深信号）**：看 acc——digit 被 invert 复用后 acc 降到 **0.882-0.935**（从 0.976 基线下降）。**说明"数字分类"系的 3 个视角（digit/rot90/invert）实际上有真实但少量的干扰**——它们是"高相关但不同输入变换"，共享参数会互相干扰。这不是 toy 那种"同族真同构、完全复用"的干净情况。
+
+**判据 A 判定**：**部分达标（非全胜非失败）**。异族分离稳定成立；同族复用受"真实数据同族存在少量干扰"影响而跨 seed 不稳定。**这暴露的是真实数据的本质**：语义/数学 toy 的同族是"真同构"（复用零损伤），而真实图像的同族 digit/rot90/invert 是"高相关但输入变换不同"，存在真实 but 少量 interference——DCA 的"复用是否伤旧"判据在阈值边缘做决策时不稳定。
+
+**待决策点**（交用户）：调整"同族"定义让数字系真同构（轻微增强 vs 差异更小），或接受"真实数据同族有少量干扰"作为发现并调整判据阈值。**先如实交付当前结果，不擅自调参**。
+
+> 探针 /tmp/dca_v2_pool.py。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：

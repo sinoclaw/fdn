@@ -13,6 +13,10 @@ venv/
 checkpoints/
 wandb/
 
+# 数据集（MNIST/FashionMNIST 等，体积大不进版本库）
+data/
+__pycache__/
+
 # 临时
 .DS_Store
 nohup.out
