@@ -669,6 +669,50 @@ cap2 = [D_sub]  cap3 = [C_logic]  cap4 = [D_seq]
 
 > 产物：`/tmp/probe_bdh_matrix.py`、`/tmp/dyn_matrix_results.json`（临时）。
 
+## 2026-09-06 DCA 下一阶段：Interference Predictor —— 免训练预测 damage，判据全达标（GPT 五审指定方向）
+
+GPT 五审（GPT_AUDIT_V08）指定：DCA 下一阶段唯一方向 = **Interference Predictor**（预测 interference 替代真实训练 probe，解决"10B 参数下 probe 太贵"的可扩展性问题）。完成三阶段迭代（/tmp/probe_ip.py→probe_ip5.py，方案 docs/DCA_IP_PLAN.md，报告 results/DCA_IP_REPORT.md）。
+
+### 核心转换
+```
+现在：Probe → 复制Cap → 真实训练 → 测Damage     [贵]
+未来：Task rep + Cap state → Predictor → 预计Damage → REUSE/SPAWN   [免训练]
+```
+
+### 方法
+- 特征 `[task_rep; cap_state]`（63 维）全部从**输入统计/权重统计派生，无 oracle task-id**
+- ground-truth damage = 真实 probe（cap 深拷贝训新任务 25ep → 测旧任务 acc 下降）
+- 数据集：平衡扩样 220 样本（同族 REUSE=28 dmg≈0.02 / 异族 SPAWN=192 dmg≈0.87）
+- 预测器：MLP(63→32→1) + 类别加权损失（REUSE 权重高，防 192 SPAWN 淹没）
+- 留出：按 (cap_family,new_family) 对留出 20%，混合 REUSE+SPAWN
+
+### 结果（3 seed，留出集）
+| seed | Spearman | REUSE/SPAWN 一致 | F1 |
+|---|---|---|---|
+| 0 | 0.715 | 0.976 | 0.986 |
+| 1 | 0.858 | 0.927 | 0.960 |
+| 2 | 0.888 | 0.976 | 0.986 |
+| 均值 | **0.820** | **0.959** | **0.978** |
+
+### 判据判定（全通过）
+| 判据 | 要求 | 实测 | |
+|---|---|---|---|
+| Spearman 排序 | ≥0.7 | 0.820 | ✅ |
+| REUSE/SPAWN 一致 | ≥0.8 | 0.959 | ✅ |
+| F1 | ≥0.8 | 0.978 | ✅ |
+| 多 seed 稳定 | 3 seed 一致 | 0.715-0.888 | ✅ |
+| 无 oracle | 输入统计派生 | ✅ | ✅ |
+
+### 关键结论
+1. **DCA 决策可预测而非试错**：未见 (cap,new_task) 组合上，predictor 仅凭输入分布统计（无 oracle）就正确排序 damage（Sp=0.82）+ 决策 REUSE/SPAWN（一致 0.96/F1 0.98）——**GPT 要的"免训练"成立，可扩展性问题找到答案**。
+2. **信号本质**：`reuse 同族→dmg≈0.02(REUSE)` / `reuse 异族→dmg≈0.87(SPAWN)` 清晰二分；predictor 学边界非记忆。
+3. **主要陷阱=类别不平衡**（v1 同族 4:36 → 全判 SPAWN → 一致 0.5）；加权损失+平衡采集修好。数据采样问题，非机制不可行。
+
+### 诚实边界
+只宣称"结构化 toy 持续学习 + 未见 cap/task 组合上，Interference Predictor 能免训练预测 damage 指导 REUSE/SPAWN"。特征目前是输入分布统计，真实任务/大参数量下是否充分**未验证**（从 toy → architecture 还需做）。
+
+> 探针 /tmp/probe_ip{1,2,3,4,5}.py；数据 /tmp/ip_dataset*.json。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
