@@ -244,6 +244,28 @@ def test_retention_curve_collection():
     assert curve[0] >= curve[1] >= curve[2], "保留曲线应大体递减"
 
 
+def test_v06_node_spawn_score():
+    """v0.6 Node 级 spawn 综合判据：当 used node 平均 novelty 高 + error 高 + competence 低 → score 高触发。
+    构造一个「B 任务让现有 node 外行」的场景，验证 _node_competence_gap 返回 gap=True。
+    """
+    import torch
+    from growth.controller import EvolutionController
+    from model.fdn import FDN
+    m = FDN(dim=4, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5)
+    # 人为制造：所有 used node competency 低、novelty 高、error 高（B 任务外行场景）
+    m.competence.data = torch.tensor([0.2, 0.3, 0.1, 0.2, 0.25, 0.3])
+    m.node_novelty.data = torch.tensor([0.9, 0.85, 0.95, 0.88, 0.9, 0.8])
+    m.node_error.data = torch.tensor([3.0, 4.0, 5.0, 3.5, 4.5, 2.8])
+    m.usage.data = torch.tensor([10., 10., 5., 8., 9., 6.])  # 都用过
+    c = EvolutionController(use_node_spawn=True, spawn_patience=1)
+    x = torch.rand(16, 4)
+    out = c._node_competence_gap(m, x)
+    assert out is not None, "应返回综合判据"
+    gap, avg_novel, avg_err, sustained, score = out
+    assert gap, f"高 novelty+高 error+低 competence 应触发 gap，但 score={score:.3f}（阈值{c.spawn_score_thr:.2f}）"
+    assert sustained, "spawn_patience=1 应立即 sustained"
+
+
 def test_v05_specialization_matrix():
     """v0.5 Node Specialization Matrix：行归一化频率矩阵 + 行余弦（模块分化判据）。
     理想分化：A/A2 高相似，A/B 低相似。

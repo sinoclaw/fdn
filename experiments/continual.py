@@ -160,7 +160,8 @@ def run_one(name, seq, cfg, seed):
             spawn_cos_thr=cfg["spawn_cos_thr"], prune_usage_thr=cfg["prune_usage_thr"],
             merge_cos_thr=cfg["merge_cos_thr"], young_tasks=cfg["young_tasks"],
             freeze_tasks=cfg["freeze_tasks"], merge_patience=cfg["merge_patience"],
-            merge_usage_thr=cfg["merge_usage_thr"])
+            merge_usage_thr=cfg["merge_usage_thr"],
+            use_node_spawn=cfg.get("use_node_spawn", False))
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["wd"])
     rec["param_count"] = model.param_count()
@@ -240,6 +241,9 @@ def run_one(name, seq, cfg, seed):
     if dynamic:
         rec["final_nodes"] = model.node_count()
         rec["spawn_count"] = controller.spawn_count
+        # v0.6：记录最近一次 spawn 的触发信号（novelty/error/competence gap）——诊断是否 Node 级判据在起作用
+        if getattr(controller, "last_spawn_reason", None) is not None:
+            rec["last_spawn_reason"] = controller.last_spawn_reason
         rec["prune_count"] = controller.prune_count
         rec["merge_count"] = controller.merge_count
         rec["memory_size"] = model.memory.size
@@ -265,8 +269,8 @@ def run_one(name, seq, cfg, seed):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--seq", default="core", choices=["core", "long", "retention", "equi"],
-                    help="retention：跑 A→A' / A→B→A' / A→B→C→A' 三组，测 A 保留曲线；equi：用等难度 D_sub 替换 C_logic，测 A/B/D 三任务 + A 保留")
+    ap.add_argument("--seq", default="core", choices=["core", "long", "retention", "equi", "mini"],
+                    help="retention：跑 A→A' / A→B→A' / A→B→C→A' 三组，测 A 保留曲线；equi：用等难度 D_sub 替换 C_logic，测 A/B/D 三任务；mini：A→B→A'（v0.6 最简）")
     ap.add_argument("--out", default="results/summary_v0.json")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n_train", type=int, default=1200)
@@ -274,18 +278,22 @@ def main():
     ap.add_argument("--bs", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--run", default="all", choices=["all", "A", "B", "D", "C"])
-    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03", "v04", "v04lite"],
-                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation；v04=+硬隔离(已反证)；v04lite=+软任务亲和(soft task bias)")
+    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03", "v04", "v04lite", "v06"],
+                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation；v04=+硬隔离(已反证)；v04lite=+软任务亲和(soft task bias)；v06=Node autonomous specialization(Novelty-Spawn)")
     ap.add_argument("--init_per_task", type=int, default=4,
                     help="v04：每个任务 spawn 的专属 Node 数（强制不相交路由）")
     ap.add_argument("--soft_task_bias", type=float, default=0.3,
                     help="v04lite：软任务亲和权重 w（q += w*task_emb[task]，不硬屏蔽）")
+    ap.add_argument("--spawn_patience", type=int, default=2,
+                    help="v06：连续多少任务 competence_gap 持续高才 spawn（防噪声，默认2）")
     args = ap.parse_args()
 
     if args.seq == "retention":
         seqs = T.RETENTION_SEQUENCES
     elif args.seq == "equi":
         seqs = {"equi": T.EQUI_SEQUENCE}
+    elif args.seq == "mini":
+        seqs = {"mini": T.MINI_SEQUENCE}
     else:
         seqs = {"core": T.CORE_SEQUENCE} if args.seq == "core" else {"long": T.LONG_SEQUENCE}
     cfg = dict(hidden=32, r=16, init_nodes=12, eq_nodes=24, k_fixed=5, kmin=3, kmax=8,
@@ -353,6 +361,18 @@ def main():
                    warmup_steps=0, warm_temp=3.0, use_lifecycle=True,
                    task_constraint=False, n_tasks=len(T.CORE_SEQUENCE),
                    soft_task_bias=args.soft_task_bias)
+    elif args.profile == "v06":
+        # 团队 v0.6（GPT 二审判定）：Node autonomous specialization（Dynamic Neural Ecology）
+        # 核心：Novelty-triggered Spawn（Node 级判据 use_node_spawn）+ 保留 v0.3 的 per-node warm / Competence Lock /
+        #       Re-activation。不再加 task embedding oracle（GPT 明令），不硬隔离，keep 软任务亲和保留作为对照可关。
+        cfg.update(use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
+                   spawn_cos_thr=0.5, merge_cos_thr=0.9, prune_usage_thr=0.01,
+                   young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05,
+                   warmup_steps=0, warm_temp=3.0, use_lifecycle=True,
+                   task_constraint=False, n_tasks=len(T.CORE_SEQUENCE),
+                   soft_task_bias=0.0,          # v0.6 用 Node 级 spawn，不靠 task_emb（GPT：不加 oracle）
+                   use_node_spawn=True,          # Node 级 Novelty-Spawn 判据
+                   spawn_patience=args.spawn_patience)
     cfg["profile"] = args.profile
 
     runs = ["A", "B", "D", "C"] if args.run == "all" else [args.run]

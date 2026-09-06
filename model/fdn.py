@@ -55,10 +55,10 @@ class FDN(nn.Module):
         self.register_buffer("node_novelty", torch.zeros(0))        # (n,) EMA 新颖度（1-cos，越大越新）
         self.register_buffer("node_error", torch.zeros(0))          # (n,) EMA 预测误差（越大越差）
         self.novelty_ema = 0.5       # node_novelty EMA 更新率
-        self.error_ema = 0.3         # node_error EMA 更新率
+        self.error_ema = 0.5         # node_error EMA 更新率（v0.6：更快反映最近模式，不被长期稀释）
+        self.competence_lr = 0.3     # competence 更新率（v0.6：更快适应当前模式，避免 0.05 长期 EMA 稀释）
         self.mature_thr = 0.6         # 成熟阈值：maturity>thr -> MATURE（protected）
         self.mature_epochs = 2        # 至少经过 N 个 epoch 才可能成熟
-        self.competence_lr = 0.05     # competence 更新率
 
         # —— FDN-v0.4：任务亲和约束（per-task 专属 Node 组，强制不相交）——
         # 每个 Node 记录归属任务 task_owner（-1=未归属/通用）。当前任务查询只能路由到

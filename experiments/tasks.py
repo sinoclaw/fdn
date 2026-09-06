@@ -94,6 +94,8 @@ CORE_SEQUENCE = ["A_add", "B_mul", "C_logic", "A2_add"]
 LONG_SEQUENCE = ["A_add", "B_mul", "C_logic", "A2_add", "D_seq", "B_mul"]
 # v0.5 等难度序列：用 D_sub（与 A/B 难度齐平）替换 C_logic，验证 A/B/D 三任务 + A 保留
 EQUI_SEQUENCE = ["A_add", "B_mul", "D_sub", "A2_add"]
+# v0.6 最简序列（GPT 指定）：A→B→A'，A/B 难度接近（add/mul 同级），验证 Node 自主专化 Group A/Group B/Group A'
+MINI_SEQUENCE = ["A_add", "B_mul", "A2_add"]
 
 # GPT 强调的「递进保留曲线」：三段独立跑，测 A 在越来越长的任务链后的保留/调用
 # 注意：A2_add 是 A' 变体（规则未变、分布平移），用来测「调用非重学」

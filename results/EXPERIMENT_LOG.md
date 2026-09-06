@@ -307,4 +307,20 @@ GPT v0.5 裁定关键：先多 seed 验证 w=0.5（至少 5 次），若 A_end>0
 **结论**：批次 1 达成——Node 级 competence/novelty 落在原地且能正确反映胜任度。下一步（批次 2）用「所有激活 node 的 competence 都低 + novelty 高」作为 Node 级 spawn 判据。
 > 产物：`/tmp/probe_v06.json`（临时）。测试 17/17 全绿。
 
+## 2026-09-06 FDN-v0.6 批次 2：Novelty-triggered Spawn（Node 级判据，核心）
+
+改 growth/controller.py 的 spawn：从「全局 min-cos（Router 视角，A/B 挤进已有 node）」→「Node 级综合判据」。
+- 加 `_node_competence_gap`：spawn = f(novelty, error, competence, usage, capacity)，用 `score = 0.4*norm(novelty) + 0.3*norm(error) + 0.3*(1-norm(comp))`，`score > spawn_score_thr(0.5)` 触发。
+- **关键设计纠偏**：初始用「所有 used node 平均 competence < 0.5 硬 AND」，实测**永不触发**（A 学会的 node competence 高拉高均值，B 来时达不到"普遍低"）→ 改为**综合分**，spawn 才触发（批次 2 的核心教训）。
+- +`_do_spawn`（抽取 spawn 执行）、`use_node_spawn` 开关（默认 False，v04lite 等旧 profile 走全局 min-cos 向后兼容）、`--profile v06`、`--spawn_patience`、`--seq mini`（A→B→A'，GPT 最简序列）。
+- model/fdn.py：error_ema 0.3→0.5、competence_lr 0.05→0.3（更快反映最近模式，不被长期 EMA 稀释——否则 node1/node9 高误差 node 的 competence 被稀释成高值）。
+- 测试：+`test_v06_node_spawn_score`（构造 B 外行场景验证 gap 触发）——18/18 全绿。
+
+### 批次 2 关键发现（探针 v06 mini, seed 0）
+- ✅ **Node 级 spawn 首次在真实训练中触发**：spawn=2，`last_spawn_reason={score:0.512, avg_novelty:0.996, avg_error:0.945, sustained:True, task:3}`——B→A' 边界触发，nodes 12→14。
+- ❌ **分化仍未形成**：disjoint=0、cos(A,B)=0.928——新 spawn 的 node12 同时被 B 和 A' 调用，未形成 B 专属。
+- ❌ **A 保留仍差**：forgetting=0.676（A_curve 起点就低 0.066）。
+- **判断**：批次 2 达成「Node 级 spawn 判据启动」这一核心目标（机制已动）；「分化」是 spawn 后 node 是否被 Router 专属化的问题，需批次 3（Plasticity Decay 5 态让新 node 高可塑、成熟后低可塑保护）配合 + 后续 Router 偏向新 node。
+> 产物：`/tmp/probe_v06c.json`（临时）。测试 18/18。
+
 
