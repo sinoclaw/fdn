@@ -859,6 +859,39 @@ GPT 七审（GPT_AUDIT_V10）指明 DCA-v2：真实数据 + 稍大神经基座�
 
 > 探针 /tmp/dca_v2_pool.py。
 
+## 2026-09-06 BDH 机制走通验证：BDH vs 等参数量 Transformer + DCA 融合（诚实负面结论）
+
+**背景**：爸爸定目标 = 找区别于 Transformer 的范式，能力不输 + 训练/推理成本双降。候选 = BDH（论文宣称 $0.0007/任务破 ARC 成本-精度前缘）。但官方开源 `bdh.py` 是论文教学 toy 代码（tinyshakespeare/3000iter/256维），**跑不出论文宣称的 Sudoku 97.4% / ARC 29.5%**（核心 BDH-CQ/管线/权重未开源）。
+
+### 第一轮：BDH vs 等参数量 Transformer（字符级语言建模，3 seed 随机划分，同预算）
+| seed | BDH val | TF val | BDH 训练 | TF 训练 | BDH 推理 | TF 推理 |
+|---|---|---|---|---|---|---|
+| 0 | 4.443 | 4.420 | 142.2s | 27.5s | 21ms | 6ms |
+| 1 | 4.385 | 4.377 | 142.7s | 29.6s | 20ms | 7ms |
+| 2 | 4.424 | 4.385 | 142.2s | 27.4s | 20ms | 6ms |
+| 均值 | 4.417 | 4.394 | 142.4s | 28.2s | 20ms | 6ms |
+
+**判据 A 能力不输：通过**（BDH 4.417 ≈ TF 4.394）。**判据 B 成本双降：未过**（BDH 训练贵5倍、推理贵3倍）。
+
+### 第二轮：DCA 融合（DCA 管理 BDH-cap substrate）vs 单 Transformer
+| | 融合 (DCA+BDH-cap) | 基线 (单Transformer) |
+|---|---|---|
+| 能力 (val) | 4.3/3.5/4.1 / 4.3/3.4/3.8 | **2.8/3.0** |
+| 训练成本 | 112-114s | **20-21s** |
+| 推理成本 | 19-21ms | **6-7ms** |
+
+**融合未达成"能力不输+双降"**：BCE val 明显差（BDH 收敛更慢），训练贵5倍、推理贵3倍。
+
+### 诚实根因分析
+1. **BDH 收敛更慢**：单 cap 80 iter 只到 val≈4.0（同量级 Transformer 240 iter 到 2.8）——BDH 字符级收敛比 Transformer 慢。
+2. **成本不降的根因**：官方 `bdh.py` 的超大稀疏维 `N=mlp_internal_dim_multiplier*D//nh`（16倍→8192维）+ `x@encoder`（D×N 全矩阵乘）+ K-is-Q attention（O(T²)），**在 CPU 上全是稠密 GEMM，稀疏正激活（ReLU）没被利用** → 单步就比 Transformer 贵。**BDH 的"稀疏红利"在官方实现+CPU+玩具任务上形同虚设。**
+3. **融合（稀疏激活只算需要的 cap）+ Interference Predictor 也没救回**——因为 BDH 的根本问题不在"能力管理"，而在它作为计算单元在 CPU 上是稠密的。
+
+### 结论（诚实）
+**BDH 在"CPU + 官方 toy 骨架 + 字符级玩具任务"配置下，验证不出"成本双降"**。它宣称的优势（Sudoku/ARC/长上下文/稀疏）依赖我们拿不到的东西（完整 BDH-CQ 管线/GPU/真正稀疏计算/长序列基准）。**这不是 BDH 永远不行，而是当前验证条件不匹配 BDH 的宣称场景。** DCA 作为能力管理层仍成立（前几轮已验证），但 BDH 作 cap substrate 在此环境未兑现价值。
+
+> 探针 /tmp/bdh_walkthrough.py、/tmp/bdh_walkthrough2.py、/tmp/bdh_seed2.py、/tmp/fusion_v2.py；方案 docs/BDH_WALKTHROUGH_PLAN.md、docs/BDH_DCA_FUSION.md；语料 /data/bdh/input.txt（本地构造，46万字符）；官方骨架 /data/bdh/bdh.py。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
