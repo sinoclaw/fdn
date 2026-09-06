@@ -155,3 +155,17 @@ results/        原始实验 JSON
 
 **核心**：v0.3→v0.4-lite 解决了「A 遗忘」和「w 强度」表层，但「任务如何分化到不同 Node」未解决——这正是 GPT 指向 Dynamic Neural Ecology 的核心（Node 自主 specialization）。
 > 原始数据 `summary_v05_seed{0..5}.json` / `summary_v05_equi.json`；报告 `V05_MULTISEED.md`/`V05_REPORT.md`。
+
+## 结果（v0.6 Node 自主专化，2026-09-06）——机制启动但分化未达成
+
+**v0.6 三件机制（Node 级 spawn / Plasticity 5 态 / freeze）成功"启动"，但「模块分化」仍未实现：specialization cos(A,B) 全 >0.99、disjoint 全 0、A 遗忘 6/4 个 >0.8。** 见 `results/V06_REPORT.md`。
+
+| 批次 | 结果 | 判定 |
+|---|---|---|
+| 1 Node 级状态 | competence 修 bug（error 倒数驱动）+ novelty/error buffer | ✅ 信号源正确 |
+| 2 Novelty-Spawn | Node 级综合判据触发 spawn（score 0.512），node12 长出 | ✅ 机制启动，但 node12 被 B/A' 共用 |
+| 3 Plasticity 5 态 + freeze | 5 态运作；freeze_old 短跑"救活"A/B（24ep：forget 0.992→0/A 0.449/B 0.904） | ✅ 机制，但 40ep 下 A 学不会是鸡生蛋 |
+| 4 多 seed | cos(A,B) 全 >0.99，disjoint 全 0，仅 seed1 偶发 A=0.699 | ❌ 分化未达成 |
+
+**核心**：v0.6 方向不能宣布成功——GPT 的"Node 自主专化"在 FDN 当前架构下**未产生 specialization pressure**（与 v0.5 结论一致，任务间无分化仍是根本缺口）。**深层问题是 A 任务本身没学会（A_curve 起点 0.02，Router 冷启动鸡生蛋）**——下一步应回到"先让 A 学好"（warm-up/curriculum），而非继续加分化机制。
+> 原始数据 `summary_v06_seed{0..5}.json`；报告 `V06_REPORT.md`。
