@@ -362,6 +362,32 @@ class FDN(nn.Module):
         params = list(self.nodes[ni].parameters()) + [self.node_keys[ni]]
         return params
 
+    def freeze_old_nodes(self, mature_thr_val=None):
+        """v0.6 批次3+：任务边界冻结「已成熟且被选中过的旧 Node」，使其不参与 Adam 主训练更新。
+        GPT 指出的本质缺口：Plasticity Decay 只保护 Hebbian 推理期，不拦 Adam 主训练梯度。
+        冻结 = 旧 Node 参数 requires_grad=False（优化器跳过），只有新 spawn / 未成熟 node 能继续学。
+        返回冻结的 node 数。"""
+        if self.maturity.numel() == 0:
+            return 0
+        m = self.maturity.detach().cpu()
+        frozen = 0
+        for i in range(self.node_count()):
+            if i in self.archived:
+                continue
+            frozen_flag = bool(m[i] >= self.mature_thr) and i != self._newest_node_idx()
+            if frozen_flag:
+                for p in self.nodes[i].parameters():
+                    p.requires_grad_(False)
+                self.node_keys[i].requires_grad_(False)
+                frozen += 1
+        self._frozen_old = getattr(self, "_frozen_old", set()) | set(
+            i for i in range(self.node_count()) if i not in self.archived and bool(m[i] >= self.mature_thr))
+        return frozen
+
+    def _newest_node_idx(self):
+        """当前 node 数-1（最新 spawn 的 node 不冻结，让它学新任务）。"""
+        return max(0, self.node_count() - 1)
+
     def node_telemetry(self):
         """v0.6：返回每 Node 的 novelty/error/competence/usage/maturity 快照（诊断用）。"""
         d = {}

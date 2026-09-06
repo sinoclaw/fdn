@@ -179,6 +179,10 @@ def run_one(name, seq, cfg, seed):
             model.set_task(pos)          # 用任务内部序号 pos 作为 task_id（A=0,B=1,C=2,A'=3）
             if cfg.get("task_constraint", False):
                 ensure_task_nodes(model, pos, cfg, seed, optimizer=opt)
+        # v0.6 批次3+：任务边界冻结「已成熟的旧 Node」（pos>0 时冻结，让旧能力不被 Adam 覆盖——GPT 指出的本质缺口）
+        if dynamic and cfg.get("freeze_old", False) and pos > 0 and hasattr(model, "freeze_old_nodes"):
+            nfroz = model.freeze_old_nodes()
+            rec.setdefault("freeze_count", []).append({"task": task, "frozen": nfroz})
         # v0.3：per-node protected routing（在 forward 内生效）+ Competence Lock（use_lifecycle）
         train_task(model, x, y, opt, cfg["epochs_per_task"], cfg["bs"], dynamic,
                    use_lifecycle=cfg.get("use_lifecycle", False))
@@ -286,6 +290,8 @@ def main():
                     help="v04lite：软任务亲和权重 w（q += w*task_emb[task]，不硬屏蔽）")
     ap.add_argument("--spawn_patience", type=int, default=2,
                     help="v06：连续多少任务 competence_gap 持续高才 spawn（防噪声，默认2）")
+    ap.add_argument("--freeze_old", action="store_true",
+                    help="v06：任务边界冻结已成熟的旧 Node（防 Adam 覆盖旧能力——GPT 指出的本质缺口）")
     args = ap.parse_args()
 
     if args.seq == "retention":
@@ -372,7 +378,8 @@ def main():
                    task_constraint=False, n_tasks=len(T.CORE_SEQUENCE),
                    soft_task_bias=0.0,          # v0.6 用 Node 级 spawn，不靠 task_emb（GPT：不加 oracle）
                    use_node_spawn=True,          # Node 级 Novelty-Spawn 判据
-                   spawn_patience=args.spawn_patience)
+                   spawn_patience=args.spawn_patience,
+                   freeze_old=args.freeze_old)   # 可选：任务边界冻结旧 Node（防 Adam 覆盖，GPT 本质缺口）
     cfg["profile"] = args.profile
 
     runs = ["A", "B", "D", "C"] if args.run == "all" else [args.run]

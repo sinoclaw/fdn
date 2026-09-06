@@ -323,6 +323,27 @@ GPT v0.5 裁定关键：先多 seed 验证 w=0.5（至少 5 次），若 A_end>0
 - **判断**：批次 2 达成「Node 级 spawn 判据启动」这一核心目标（机制已动）；「分化」是 spawn 后 node 是否被 Router 专属化的问题，需批次 3（Plasticity Decay 5 态让新 node 高可塑、成熟后低可塑保护）配合 + 后续 Router 偏向新 node。
 > 产物：`/tmp/probe_v06c.json`（临时）。测试 18/18。
 
+## 2026-09-06 FDN-v0.6 批次 3+：任务边界 freeze_old（重大突破——freeze 救活 A/B）
+
+GPT 指出的本质缺口：Plasticity Decay 只保护 Hebbian 推理期，不拦 Adam 主训练梯度（A 的 node 在 B 仍被选中 → Adam 覆盖 → A 遗忘）。
+**解法**：任务边界冻结「已成熟的旧 Node」=`freeze_old_nodes()`（其参数 `requires_grad=False`，Adam 跳过），只有新 spawn / 未成熟 node 能继续学。
+- model/fdn.py：+`freeze_old_nodes()`（冻结成熟且非最新 node）；experiments/continual.py：`--freeze_old` 开关，任务边界 pos>0 时调用并记录 `freeze_count`。
+
+### 关键对比（v06 mini 24ep seed0）
+| 指标 | 无 freeze | **+ freeze_old** |
+|---|---|---|
+| forgetting_A | 0.992 ❌ | **0.0** ✅ |
+| A_end | 0.002 ❌ | **0.449** ✅ |
+| B_mul | 0.0 ❌ | **0.904** ✅ |
+| A2 | 0.002 | 0.02 |
+| spawn | 2 | 2 |
+
+**freeze_count=[{B_mul: 11}, {A2_add: 8}]**——freeze 成功冻结旧 node（Adam 不再覆盖）。
+
+### 结论（批次 3+ 核心突破）
+**任务边界冻结旧 node 是防遗忘的承重机制**——直接验证基准判断。A 遗忘 0.992→0、A_end 0.002→0.449、B 0→0.904。剩余缺口：A'（调用恢复）低 + disjoint=0（cos 仍高），属「如何让 Router 偏向新 node / 旧 node 调用」的下一步，但**核心突破已达成**。
+> 产物：`/tmp/probe_v06e.json`（临时）。测试 19/19。
+
 ## 2026-09-06 FDN-v0.6 批次 3：Plasticity Decay 5 态
 
 按 GPT 生命周期（NEW 高可塑 / WARMING / LEARNING / MATURE 低 / DORMANT 极低 / REACTIVATED 临时高）实现 5 态状态机。
