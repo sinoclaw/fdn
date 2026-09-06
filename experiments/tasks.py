@@ -65,18 +65,35 @@ def gen_seq(n, seed=0, dmin=0.05, dmax=0.25):
     return np.stack(xs), np.array(ys, dtype=np.float32)
 
 
+def gen_sub(n, seed=0, lo=0.2, hi=1.0):
+    """D_sub（v0.5 等难度任务，替代 C_logic）：x=(a,b)∈[lo,hi]^2，y=(a-b+0.8)/1.6 ∈[0,1]。
+    一次线性带符号差值（难度与 add/mul 齐平），输入 support 与 A[0,1]/B[0.5,1] 不同 → Router 可区分。
+    """
+    rng = np.random.RandomState(seed)
+    xs, ys = [], []
+    for _ in range(n):
+        a = rng.uniform(lo, hi)
+        b = rng.uniform(lo, hi)
+        xs.append(_norm_x([a, b]))
+        ys.append(float((a - b + 0.8) / 1.6))  # range [0,1]
+    return np.stack(xs), np.array(ys, dtype=np.float32)
+
+
 # 任务注册表：给出核心实验序列 A→B→C→A'
 TASKS = {
     "A_add":  lambda n, s: gen_add(n, s),
     "B_mul":  lambda n, s: gen_mul(n, s),
     "C_logic": lambda n, s: gen_logic(n, s),
     "D_seq":  lambda n, s: gen_seq(n, s),
+    "D_sub":  lambda n, s: gen_sub(n, s),
     "A2_add": lambda n, s: gen_add(n, s, lo=0.15, hi=0.85, shift=0.0),  # A' 变体
 }
 
 # 核心实验顺序
 CORE_SEQUENCE = ["A_add", "B_mul", "C_logic", "A2_add"]
 LONG_SEQUENCE = ["A_add", "B_mul", "C_logic", "A2_add", "D_seq", "B_mul"]
+# v0.5 等难度序列：用 D_sub（与 A/B 难度齐平）替换 C_logic，验证 A/B/D 三任务 + A 保留
+EQUI_SEQUENCE = ["A_add", "B_mul", "D_sub", "A2_add"]
 
 # GPT 强调的「递进保留曲线」：三段独立跑，测 A 在越来越长的任务链后的保留/调用
 # 注意：A2_add 是 A' 变体（规则未变、分布平移），用来测「调用非重学」

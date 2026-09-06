@@ -44,6 +44,48 @@ def node_task_affinity(node_activations, n_nodes):
     return subsets, (disjoint / pairs if pairs else 1.0)
 
 
+def node_specialization_matrix(task_counts, n_nodes):
+    """FDN-v0.5：Node Specialization Matrix。给定 {task: list[node_id 出现次数]}（长度 n_nodes，
+    第 i 项为该 task 激活 node_i 的次数），返回 [n_task × n_node] 的行归一化频率矩阵。
+    用于直接测量「模块分化」：理想态 A/A2 行高相似、B/D 行与 A 低相似。
+    """
+    tasks = list(task_counts.keys())
+    remove = []
+    for t in tasks:
+        if t not in task_counts or task_counts[t] is None:
+            remove.append(t)
+    # 收集
+    mat = []
+    for t in tasks:
+        counts = task_counts.get(t)
+        if counts is None:
+            counts = [0] * n_nodes
+        if len(counts) < n_nodes:
+            counts = counts + [0] * (n_nodes - len(counts))
+        counts = counts[:n_nodes]
+        total = sum(counts) or 1.0
+        mat.append([c / total for c in counts])
+    return mat, tasks
+
+
+def _row_cosine(a, b):
+    """两行归一化频率向量的余弦相似度。"""
+    import math
+    num = sum(x * y for x, y in zip(a, b))
+    da = math.sqrt(sum(x * x for x in a)) or 1e-9
+    db = math.sqrt(sum(y * y for y in b)) or 1e-9
+    return num / (da * db)
+
+
+def row_cosine_pairs(matrix, tasks):
+    """返回 { (t_i, t_j): cos } 对任意两任务行的相似度（模块分化判据用）。"""
+    pairs = {}
+    for i in range(len(tasks)):
+        for j in range(i + 1, len(tasks)):
+            pairs[(tasks[i], tasks[j])] = _row_cosine(matrix[i], matrix[j])
+    return pairs
+
+
 def param_drift(params_before, params_after):
     """相对参数漂移 ||Δθ|| / ||θ_before||（逐片段，跳过不同形状）。"""
     num = 0.0

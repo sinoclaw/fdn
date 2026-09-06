@@ -39,12 +39,14 @@ def predict(model, x, dynamic=False):
         return res.numpy().reshape(-1), {}
 
 
-def evaluate_model(model, seq_name, seed, task_ids=None):
+def evaluate_model(model, seq_name, seed, task_ids=None, counts=False):
     """对每个任务生成评估集并测准确率 + 记录激活 Node。
     v0.4：若启用 task 约束，评估每任务前 set_task(任务 id)，保证用其专属 Node 组评估。
+    counts=True：返回 {task: {node_id: count}}（Node Specialization Matrix 用）。
     """
     accs = {}
     activations = {}
+    ncounts = {}
     for i, tname in enumerate(seq_name):
         x, y = T.TASKS[tname](512, seed)
         # v0.4：按当前任务 id 评估（若 task_ids 提供 pos 映射）
@@ -53,8 +55,14 @@ def evaluate_model(model, seq_name, seed, task_ids=None):
         pred, info = predict(model, torch.from_numpy(x))
         accs[tname] = M.accuracy(pred, y, T.TOL)
         if "idx" in info:
-            activations[tname] = sorted(set(info["idx"].reshape(-1).tolist()))
-    return accs, activations
+            arr = info["idx"].reshape(-1).tolist()
+            activations[tname] = sorted(set(arr))
+            if counts:
+                cnt = {}
+                for ni in arr:
+                    cnt[ni] = cnt.get(ni, 0) + 1
+                ncounts[tname] = cnt
+    return accs, activations, ncounts
 
 
 def ensure_task_nodes(model, task_id, cfg, seed, optimizer=None):
@@ -158,6 +166,7 @@ def run_one(name, seq, cfg, seed):
     timeline = []          # 每任务阶段后的全任务准确率
     all_activations = {}   # task -> set(node)
     per_task_best = {}
+    final_act_counts = {}  # 最后一次评估的 Node 计数（specialization matrix 用）
 
     for pos, task in enumerate(seq):
         x, y = T.TASKS[task](cfg["n_train"], seed + pos * 977)
@@ -177,10 +186,11 @@ def run_one(name, seq, cfg, seed):
             rec["reactivation"][task] = model.reactivate_score(qq.mean(dim=0))
         if dynamic and controller is not None:
             controller.task_boundary(model, opt, x)   # 结构演化：任务边界触发（降频）
-        accs, act = evaluate_model(model, seq, seed + 1000 + pos,
-                                   task_ids=list(range(len(seq))))
+        accs, act, act_counts = evaluate_model(model, seq, seed + 1000 + pos,
+                                   task_ids=list(range(len(seq))), counts=True)
         timeline.append({"after": task, "acc": accs})
         all_activations[task] = set(act.get(task, []))
+        final_act_counts = act_counts   # 记住最后一次评估的 Node 计数（specialization matrix 用）
 
     # ---------- 关键指标 ----------
     def acc_after(task):
@@ -213,6 +223,18 @@ def run_one(name, seq, cfg, seed):
     rec["task_affinity_disjoint_frac"] = disjoint
     rec["task_node_groups"] = {t: sorted(list(v)) for t, v in subs.items()}
 
+    # FDN-v0.5：Node Specialization Matrix（GPT 强调，比 accuracy 更重要，直接测「模块分化」）
+    n_nodes = model.node_count() if dynamic else len(getattr(model, "nodes", []))
+    try:
+        task_counts = {t: [final_act_counts.get(t, {}).get(i, 0) for i in range(n_nodes)] for t in seq}
+    except Exception:
+        task_counts = {}
+    if task_counts:
+        mat, mtx_tasks = M.node_specialization_matrix(task_counts, n_nodes)
+        rec["specialization_matrix"] = mat
+        rec["specialization_tasks"] = mtx_tasks
+        rec["specialization_cos"] = {f"{a}~{b}": round(c, 3) for (a, b), c in M.row_cosine_pairs(mat, mtx_tasks).items()}
+
     if dynamic:
         rec["final_nodes"] = model.node_count()
         rec["spawn_count"] = controller.spawn_count
@@ -237,8 +259,8 @@ def run_one(name, seq, cfg, seed):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--seq", default="core", choices=["core", "long", "retention"],
-                    help="retention：跑 A→A' / A→B→A' / A→B→C→A' 三组，测 A 保留曲线")
+    ap.add_argument("--seq", default="core", choices=["core", "long", "retention", "equi"],
+                    help="retention：跑 A→A' / A→B→A' / A→B→C→A' 三组，测 A 保留曲线；equi：用等难度 D_sub 替换 C_logic，测 A/B/D 三任务 + A 保留")
     ap.add_argument("--out", default="results/summary_v0.json")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n_train", type=int, default=1200)
@@ -256,6 +278,8 @@ def main():
 
     if args.seq == "retention":
         seqs = T.RETENTION_SEQUENCES
+    elif args.seq == "equi":
+        seqs = {"equi": T.EQUI_SEQUENCE}
     else:
         seqs = {"core": T.CORE_SEQUENCE} if args.seq == "core" else {"long": T.LONG_SEQUENCE}
     cfg = dict(hidden=32, r=16, init_nodes=12, eq_nodes=24, k_fixed=5, kmin=3, kmax=8,

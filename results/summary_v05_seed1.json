@@ -1,0 +1,317 @@
+{
+  "config": {
+    "hidden": 32,
+    "r": 16,
+    "init_nodes": 12,
+    "eq_nodes": 24,
+    "k_fixed": 5,
+    "kmin": 3,
+    "kmax": 8,
+    "memory_max": 256,
+    "plastic_lr": 0.001,
+    "plastic_cap": 0.1,
+    "eval_every": 120,
+    "spawn_cos_thr": 0.5,
+    "prune_usage_thr": 0.01,
+    "merge_cos_thr": 0.9,
+    "mlp_hidden": 64,
+    "lr": 0.003,
+    "wd": 1e-05,
+    "n_train": 1200,
+    "epochs_per_task": 40,
+    "bs": 32,
+    "use_plasticity": true,
+    "use_memory": true,
+    "dynamic_tau": true,
+    "dynamic_k": true,
+    "young_tasks": 2,
+    "freeze_tasks": 2,
+    "merge_patience": 2,
+    "merge_usage_thr": 0.05,
+    "warmup_steps": 0,
+    "warm_temp": 3.0,
+    "use_lifecycle": true,
+    "task_constraint": false,
+    "n_tasks": 4,
+    "soft_task_bias": 0.5,
+    "profile": "v04lite"
+  },
+  "retention": false,
+  "results": [
+    {
+      "seq_name": "core",
+      "sequence": [
+        "A_add",
+        "B_mul",
+        "C_logic",
+        "A2_add"
+      ],
+      "results": [
+        {
+          "model": "C",
+          "seed": 1,
+          "param_count": 17304,
+          "reactivation": {
+            "A_add": [
+              2,
+              9,
+              4,
+              7,
+              11,
+              8,
+              10,
+              1,
+              6,
+              3,
+              5,
+              0
+            ],
+            "B_mul": [
+              9,
+              10,
+              8,
+              4,
+              12,
+              7,
+              2,
+              3,
+              5,
+              1,
+              6,
+              11,
+              0
+            ],
+            "C_logic": [
+              6,
+              12,
+              1,
+              11,
+              9,
+              10,
+              3,
+              13,
+              7,
+              2,
+              4,
+              8,
+              5,
+              0
+            ],
+            "A2_add": [
+              12,
+              11,
+              6,
+              9,
+              2,
+              13,
+              1,
+              10,
+              4,
+              7,
+              8,
+              3,
+              5,
+              0
+            ]
+          },
+          "forgetting_A": 0.0,
+          "acc_A_init": 0.0078125,
+          "acc_A_end": 0.083984375,
+          "node_overlap_A_A2": 0.42857142857142855,
+          "node_set_A": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
+          "node_set_A2": [
+            4,
+            6,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14
+          ],
+          "A_curve_after_each": [
+            0.0078125,
+            0.015625,
+            0.0,
+            0.083984375
+          ],
+          "task_affinity_disjoint_frac": 0.0,
+          "task_node_groups": {
+            "A_add": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ],
+            "B_mul": [
+              3,
+              4,
+              5,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13
+            ],
+            "C_logic": [
+              2,
+              3,
+              4,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13
+            ],
+            "A2_add": [
+              4,
+              6,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14
+            ]
+          },
+          "final_nodes": 15,
+          "spawn_count": 3,
+          "prune_count": 5,
+          "merge_count": 0,
+          "memory_size": 50,
+          "plastic_magnitude": 0.23931141197681427,
+          "k_used": 5,
+          "maturity": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "competence": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "n_mature": 14,
+          "usage": [
+            0.0,
+            11749.0,
+            116251.0,
+            70191.0,
+            156788.0,
+            30525.0,
+            107904.0,
+            166626.0,
+            107212.0,
+            181616.0,
+            148178.0,
+            140705.0,
+            132518.0,
+            66377.0,
+            2048.0
+          ],
+          "timeline": [
+            {
+              "after": "A_add",
+              "acc": {
+                "A_add": 0.0078125,
+                "B_mul": 0.046875,
+                "C_logic": 0.00390625,
+                "A2_add": 0.005859375
+              }
+            },
+            {
+              "after": "B_mul",
+              "acc": {
+                "A_add": 0.015625,
+                "B_mul": 0.001953125,
+                "C_logic": 0.03515625,
+                "A2_add": 0.0078125
+              }
+            },
+            {
+              "after": "C_logic",
+              "acc": {
+                "A_add": 0.0,
+                "B_mul": 0.0,
+                "C_logic": 0.052734375,
+                "A2_add": 0.0
+              }
+            },
+            {
+              "after": "A2_add",
+              "acc": {
+                "A_add": 0.083984375,
+                "B_mul": 0.03515625,
+                "C_logic": 0.044921875,
+                "A2_add": 0.021484375
+              }
+            }
+          ],
+          "final_acc": {
+            "A_add": 0.083984375,
+            "B_mul": 0.03515625,
+            "C_logic": 0.044921875,
+            "A2_add": 0.021484375
+          },
+          "seq": [
+            "A_add",
+            "B_mul",
+            "C_logic",
+            "A2_add"
+          ],
+          "wall_sec": 1751.2
+        }
+      ]
+    }
+  ]
+}

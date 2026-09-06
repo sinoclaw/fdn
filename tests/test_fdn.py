@@ -244,6 +244,27 @@ def test_retention_curve_collection():
     assert curve[0] >= curve[1] >= curve[2], "保留曲线应大体递减"
 
 
+def test_v05_specialization_matrix():
+    """v0.5 Node Specialization Matrix：行归一化频率矩阵 + 行余弦（模块分化判据）。
+    理想分化：A/A2 高相似，A/B 低相似。
+    """
+    from evaluation.metrics import node_specialization_matrix, row_cosine_pairs
+    tc = {'A_add': [0, 5, 5, 0, 0, 0], 'B_mul': [0, 0, 0, 5, 0, 0],
+          'D_sub': [0, 0, 0, 0, 5, 0], 'A2_add': [0, 4, 6, 0, 0, 0]}
+    mat, tasks = node_specialization_matrix(tc, 6)
+    assert len(mat) == 4 and len(mat[0]) == 6, "矩阵应为 [任务数 × node数]"
+    for row in mat:
+        assert abs(sum(row) - 1.0) < 1e-6, "行应归一化到 1"
+    cos = row_cosine_pairs(mat, tasks)
+    assert cos[('A_add', 'A2_add')] > 0.9, "A/A2 应高相似（复用）"
+    assert cos[('A_add', 'B_mul')] < 0.3, "A/B 应低相似（分化）"
+    # 全同复用场景：所有任务用同一批 node
+    tc2 = {'A_add': [0, 5, 5, 0], 'B_mul': [0, 5, 5, 0], 'C_logic': [0, 5, 5, 0]}
+    mat2, tasks2 = node_specialization_matrix(tc2, 4)
+    cos2 = row_cosine_pairs(mat2, tasks2)
+    assert cos2[('A_add', 'B_mul')] > 0.99, "全同复用应高相似"
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]

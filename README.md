@@ -142,3 +142,16 @@ results/        原始实验 JSON
 - w=0.3 太弱（A 被 B 挤占 0.104）；w=0.8 太强（task_emb 主导路由破坏 A/A' 复用，A=0.020/遗忘0.75）。
 - **机制**：`q = W_q·x + w·task_emb[task]` 软性鼓励不同任务偏向不同 Node 组，但不硬屏蔽（保住 A/A' 复用）。
 > 原始数据 `summary_v04lite.json`（w0.3）/`summary_v04lite_w05.json`（w0.5）/`summary_v04lite_w08.json`（w0.8）。
+
+## 结果（v0.5 多 seed + 等难度 + Specialization，2026-09-06）——关键反证
+
+**w=0.5 不跨 seed 稳定；且 FDN 当前架构下任务间无真模块分化（disjoint=0 / 行余弦全>0.88）——模块分化未发生是根本缺口。** 见 `results/V05_REPORT.md`。
+
+| 批次 | 结果 | 判定 |
+|---|---|---|
+| 1 多 seed (0-5) | A_end 0.018→0.973（50 倍），仅 seed3 达标，B 全 <0.1 | ❌ w=0.5 不复现 |
+| 2 等难度 D_sub | D_sub=0.139 >> C_logic=0.002，forgetting=0 | ✅ 换任务有效（GPT 建议证实） |
+| 3 Specialization | A~A2=0.984（复用✓）但 A~B=0.927/A~D=0.952（**应低实高**），disjoint=0 | ❌ 无模块分化 |
+
+**核心**：v0.3→v0.4-lite 解决了「A 遗忘」和「w 强度」表层，但「任务如何分化到不同 Node」未解决——这正是 GPT 指向 Dynamic Neural Ecology 的核心（Node 自主 specialization）。
+> 原始数据 `summary_v05_seed{0..5}.json` / `summary_v05_equi.json`；报告 `V05_MULTISEED.md`/`V05_REPORT.md`。

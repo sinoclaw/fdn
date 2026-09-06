@@ -260,4 +260,34 @@ v0.4 硬隔离反证后拍板修正：不硬屏蔽，用可学习 task_emb 加 q
 - **结论**：软任务亲和存在**最优强度 w≈0.5**，同时保住跨任务复用 + 让难任务（B）学得更多——回应 GPT 目标。
 - 命令：`.venv/bin/python experiments/continual.py --seq core --seed 0 --n_train 1200 --epochs_per_task 40 --run C --profile v04lite --soft_task_bias 0.5 --out results/summary_v04lite_w05.json`
 
+## 2026-09-06 FDN-v0.5 批次 1：多 seed 复现（重点反证）
+
+GPT v0.5 裁定关键：先多 seed 验证 w=0.5（至少 5 次），若 A_end>0.4/遗忘≈0/A2>0.35/B>0.15 才可信。据此跑 seed 0..5（v04lite, w=0.5, 40ep, core）。
+
+### 结果（seed 0..5）
+| seed | A_end | forgetting | B_mul | C_logic | A2 | overlap | nodes |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.018 | **0.904** | 0.035 | 0.086 | 0.031 | 0.538 | 15 |
+| 1 | 0.084 | 0.0 | 0.035 | 0.045 | 0.021 | 0.429 | 15 |
+| 2 | 0.188 | 0.0 | 0.0 | 0.0 | 0.742 | 0.700 | 14 |
+| 3 | **0.973** | 0.0 | 0.002 | 0.053 | 1.0 | 0.800 | 13 |
+| 4 | 0.223 | 0.0 | 0.084 | 0.070 | 0.254 | 0.875 | 14 |
+| 5 | 0.061 | 0.613 | 0.006 | 0.010 | 0.502 | 0.636 | 14 |
+
+**判定（重点反证）**：
+- ❌ **w=0.5 不能跨 seed 复现**：A_end 0.018→0.973（>50 倍差异），forgetting 0→0.904，仅 seed3 达标。**GPT 的"最大不确定性"警告被证实。**
+- ❌ **B 全部 <0.1**（0/6 达 0.15 阈值）。
+- ✅ 但 **overlap 4/6 >0.5**（A/A' 复用较稳定，说明复用机制本身在，只是精度不稳）。
+- 🎯 **根因 = 任务间无真模块分化**：6 seed 的 `task_affinity_disjoint_frac` 全 = **0.0**（A/B/C/A' 用同一批 node）。这是「B 学不好 + A 假象/被覆盖」的共同根源，也是 GPT 反复强调的短板。
+- 🎯 **seed3 的 A=0.973 是"假象"**：A_curve=[0.08,0.041,0.064,0.973]，A 一直没学会（~0.04-0.08），到 A' 才虚高——A' 恰好命中大输出 node，非"学得好"。
+
+### 结论
+**w=0.5 不是稳定解；真正的拷问核心是「模块分化如何实现」（disjoint=0）。** 这直接推出批次 3 的 Node Specialization Matrix 指标（GPT 强调"比 accuracy 更重要"）。
+
+## 2026-09-06 FDN-v0.5 批次 3：Node Specialization Matrix 指标落地
+- `evaluation/metrics.py`：+`node_specialization_matrix`（行归一化频率矩阵）+`_row_cosine`/`row_cosine_pairs`（行余弦）。
+- `experiments/continual.py`：evaluate_model 加 `counts=True` 收集每任务 Node 激活计数；run_one 输出 `specialization_matrix`/`specialization_tasks`/`specialization_cos`。
+- `tests/test_fdn.py`：+`test_v05_specialization_matrix`（理想分化 A/A2 高相似、A/B 低相似）——17/17 全绿。
+- **探针验证**（equi 短跑）：A~D_sub cos=0.984、A~B cos=0.934——**所有任务行高相似（分化弱）**，与批次 1 disjoint=0 同根因。
+
 
