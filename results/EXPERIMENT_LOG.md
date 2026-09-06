@@ -405,6 +405,29 @@ GPT 四审建议的**最后决定性实验**（docs/GPT_AUDIT_V07.md）：拿 St
 
 > 产物：`/tmp/probe_cond.py`（临时）。
 
+## 2026-09-06 FDN 封存复核：load-balancing 承重件实验（Router 坍塌假说反证）
+
+爸爸质疑"MoE 是否缺工业标准件（load-balancing loss / Router Z-loss）才学不会"——这是合理的工程怀疑（Switch Transformer / Mixtral 靠这两个件让 Router 稳定分配梯度，防坍塌/专家饿死）。本实验：StaticMoE 加 LB + Z，单任务 A 重跑（/tmp/probe_lb.py，40ep）。
+
+| 配置 | 单任务 A acc | lb_raw |
+|---|---|---|
+| RawMoE n=12 k=3（裸跑） | **0.314** | — |
+| RawMoE n=12 k=5（裸跑） | 0.119 | — |
+| BalMoE n=12 k=3（+LB+Z） | 0.111 | 3.906 |
+| BalMoE n=12 k=5（+LB+Z） | 0.119 | 6.363 |
+| BalMoE n=24 k=5（+LB+Z） | 0.170 | 7.194 |
+| BalMoE n=12 k=8（+LB+Z） | 0.184 | 8.817 |
+
+### 核心结论（Router 坍塌假说被反证）
+1. **load-balancing + Z-loss 没有提升 MoE 性能**（n=12 k=3：0.314→0.111 反而下降；k=5 持平）——**Router 坍塌/专家饿死不是瓶颈**，加承重件反而干扰了 k=3 的自然分工。
+2. **裸跑 k=3 达到 0.314**（高于此前记录的 0.072）——说明早期基线在 30ep 下欠训练，40ep 更充分。但**无论如何 0.314 仍远逊 StaticMLP 的 1.000**，且 k=3（最少专家、最窄激活）才勉强到这个水平。
+3. **核心矛盾未变**：MoE 最优（裸跑 k=3，0.314）仍远不及共享网络（StaticMLP 1.0），加工业标准件（LB/Z）反而更差。
+
+### 判定
+**爸爸的"补标准件"直觉方向对了（工程上是最该先试的），但结果不支持 LB 是瓶颈**——加 LB 反而抑制性能，进一步确认 **"MoE 稀疏路由在 toy 回归体系下不适配/欠训"是真实根因，而非 Router 坍塌**。这加固了 FDN 封存结论：**共享网络（StaticMLP）在此体系始终最优，MoE 的独立专家+稀疏路由是根本劣势**（无论加不加外围机制/标准件）。
+
+> 产物：`/tmp/probe_lb.py`（临时）。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
