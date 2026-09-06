@@ -1,4 +1,16 @@
-# FDN-v0 — Fully Dynamic Network（研究 v0）
+# FDN-v0 — Fully Dynamic Network（研究 v0）→ 已封存；新方向 DCA
+
+> **⚠️ 项目状态（2026-09-06）：`FDN` 已正式封存（No-Go / Architecture Study）。研究方向已质变为 `Dynamic Capability Architecture（DCA）`——见 [docs/DCA_ARCHITECTURE.md](docs/DCA_ARCHITECTURE.md)。**
+>
+> **GPT 五审裁定**（docs/GPT_AUDIT_V08.md）："**FDN 可以封存；Dynamic Capability 研究正式开新章。**" 8 结构化任务 × 5 seed 验证矩阵全绿（c316651），研究从 Dynamic MoE/Node 转向 **Dynamic Capability System**（能力出生/冻结/复用/组合/扩张）。
+>
+> 下方是 FDN 完整演进记录（v0→v0.7，作为**已封存的反证资产**保留——含 MoE 为什么死、三大判据、可迁移工具链）。**DCA 是当前研究方向。**
+
+---
+
+# 以下为 FDN（已封存）完整历史记录
+
+## FDN-v0 — Fully Dynamic Network（研究 v0）
 
 > 「训练一个能不断重组、生长、记忆、退化自己的计算系统」的最小实证项目。
 > 设计源：一份 ChatGPT 深度设计对话（完整对话存 `docs/DESIGN_SOURCE.md`），设计蓝图与判定准则见 `docs/DESIGN.md`。
