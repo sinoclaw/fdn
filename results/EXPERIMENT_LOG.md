@@ -571,6 +571,32 @@ FastWeights 结构正解已确立（v3：A/B/A' 全 1.0 + A_forget=0）。自组
 
 > 产物：`/tmp/probe_bdh_split.py`、`/tmp/probe_bdh_split2.py`（临时）。
 
+## 2026-09-06 拆分激励测试：load-balancing loss 破坏专化（诚实负面信号）
+
+给 FastWeights 池加 load-balancing loss（Switch Transformer 标准件），试图促 Router 自发拆成 add/mul 专家（/tmp/probe_bdh_lb.py）。判据：acc 保持 1.0 + route z0→cap0 显著 + cap 专化。
+
+| lb_coef | acc | route z0→cap0 | cap0@add | cap1@mul | cap0@mul(交叉) | cap1@add(交叉) |
+|---|---|---|---|---|---|---|
+| 0.0 | 1.0 | 0.767 | **0.686** | 0.0 | 0.0 | 0.539 |
+| 0.05 | 1.0 | 0.465 | 0.0 | 0.277 | 0.296 | 0.0 |
+| 0.1 | 1.0 | 0.506 | 0.0 | 0.281 | 0.236 | 0.004 |
+| 0.3 | 1.0 | 0.535 | 0.0 | 0.258 | 0.221 | 0.0 |
+| 1.0 | 1.0 | 0.559 | 0.0 | 0.236 | 0.206 | 0.0 |
+
+### 结论（诚实）
+1. **load-balancing 反而破坏专化**：加 LB 后 cap0@add、cap1@mul 掉到 0.0-0.28（明显变差）——LB 强制"均匀分配"让两个 cap 各学一半（半桶水），而非各学一个模式。
+2. **lb=0.0 反而最接近专化**：cap0@add=0.686、cap0@mul=0.0（cap0 偏向 add 且不跨界），但仍未纯净。
+3. **关键差距**：与 (b) 强制正确路由 upper bound（cap0/cap1 纯专家、交叉≈0）相比，**Router 在无监督下学不出正确的拆分分配**——"拆分"需要**路由监督信号**或**更强的分解驱动**，而 toy 上的这种监督本质是 oracle 的雏形。
+
+### 定位
+FDN 系列已形成完整的探索闭环（见 README/EXPERIMENT_LOG）：
+- v0→v0.7：MoE 专家路由学不会（梯度坍塌）→ No-Go
+- BDH 式：共享骨架+连续门控能学新但不保旧（共享覆盖）
+- **FastWeights v3：每能力独立路径 → A/B/A' 全 1.0 + A_forget=0（结构性正解，已确立）**
+- 自组织拆分：架构能拆（b upper bound 纯专家+零交叉），但 Router 无监督不主动拆（懒路由），LB 激励反而破坏专化
+
+> 产物：`/tmp/probe_bdh_lb.py`（临时）。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
