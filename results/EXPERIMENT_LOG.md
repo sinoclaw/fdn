@@ -1024,6 +1024,29 @@ GPT 七审（GPT_AUDIT_V10）指明 DCA-v2：真实数据 + 稍大神经基座�
 
 > 探针 /tmp/robust_eff.py。
 
+### 📚 学习 burn_hatchling（BDH MoE/稀疏 Rust 分支）：MoE 是占位，fast weights 是真金
+**爸爸指示："你看下 bdh 是不是有 MoE 的分支仓库，去学习一下。"** 克隆 `mosure/burn_dragon_hatchling`（Rust/Burn 端口，特性宣称 mixture-of-expert routing + sparse synaptic backpropagation）到 `/data/burn_dragon_hatchling`。
+
+**学到的完整机制**（读源码）：
+| 组件 | 文件 | 学到 |
+|---|---|---|
+| 块稀疏注意 | `src/kernel/block_sparse.rs` | `BlockPattern2d` 用 `active_pairs` 只算激活块；`BlockPattern1d` 用 `active_blocks` 只算 latent 激活块 |
+| 稀疏低秩投影 | `src/kernel/relu_lowrank.rs` | `fused_forward`：`input.matmul(weight)`→ReLU阈值→`× mask` |
+| 模型主体 | `src/model/bdh.rs` | `encoder` 把 D→N 超大稀疏维；`recurrent_attention` **`rho = rho + x_t_latent*v_t`**（Hebbian fast weights，状态在边权/突触上）|
+| MoE 配置 | `src/model/config.rs` | `n_expert` 把 latent 按 `latent_per_head/n_expert` 切段 |
+
+**两个关键诚实发现**：
+1. **Burn 的稀疏是"伪稀疏"**——`relu_lowrank.rs` L17 `input.matmul(weight)` 是**全量稠密 GEMM**，L31-33 才 `× mask`（后置乘法掩码，非真稀疏内核）。稀疏只是"激活少"，**FLOPs 没省**。与官方 bdh.py 相同，也与我 CPU 上发现的 BDH 问题一致。
+2. **"mixture-of-expert routing"根本没实现**——`src/model/router.rs` 是**空文件(0字节)**；`n_expert` 只在 config.rs 做**整除校验**，遍历 N latent 时全算；**代码无任何真的 expert routing/gating 逻辑**。MoE 只是 README feature 声明 + latent 分块占位。
+
+**结论**：BDH 的 MoE 分支代码层面**没有真的 MoE 路由**（router 空/n_expert 仅校验），稀疏仍是"稠密 GEMM + 后置 mask"伪稀疏。**不能指望从 BDH MoE 分支学到"真稀疏重投影"——它没做出来。**
+
+**但学到真正值钱的**：BDH 的 **`rho` 快权重状态**（`recurrent_attention` 里 `rho = rho + x_t_latent * v_t`，Hebbian 累积，状态在突触边权上、省长上下文）——这才是 BDH 区别于 Transformer 的核心，也是往"能力不输+降本"走的真金。
+
+**方向（爸爸认可）**：与其在"伪稀疏"上打转，把 **BDH 真金的 fast weights（rho 快权重状态）+ DCA 独立路径** 融合成"**稀疏激活 + 快权重记忆**"原语。这才能可能真正"能力不输 + 推理降本"。
+
+> 学习仓库 /data/burn_dragon_hatchling（源码已本地化）。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
