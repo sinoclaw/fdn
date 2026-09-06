@@ -177,6 +177,38 @@ def test_v03_reactivation():
     assert ranked2 == [], "全未成熟时不应 reactivate 任何 Node"
 
 
+def test_v04_task_constraint():
+    """v0.4 任务亲和约束：set_task 后路由只允许本任务 Node + 未归属 Node，屏蔽其他任务 Node。"""
+    m = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=6, base_k=3, kmin=2, kmax=5,
+            task_constraint=True)
+    # 模拟任务归属：Node 0-2 归 task0，Node 3-5 归 task1
+    m.task_owner = torch.tensor([0, 0, 0, 1, 1, 1], dtype=torch.long)
+    m.set_task(0)
+    allow = m._task_mask()
+    assert allow is not None, "task_constraint 启用应返回 mask"
+    assert allow[:3].all() and not allow[3:].any(), "task0 应只能路由 Node 0-2"
+    # 屏蔽后，forward 的 top-k 只能选中 Node 0-2
+    m.eval()
+    x = torch.rand(8, T.DIM)
+    _, info = m(x)
+    sel = set(info["idx"].reshape(-1).tolist())
+    assert sel <= {0, 1, 2}, f"task0 路由只能命中 Node 0-2，got {sel}"
+
+
+def test_v04_task_owner_on_append():
+    """v0.4：set_task 后 _append_node 的归属应为当前任务，未 set_task 时为 -1。"""
+    m = FDN(dim=T.DIM, hidden=16, r=8, initial_nodes=3, base_k=3, kmin=2, kmax=5,
+            task_constraint=True)
+    # 初始 3 个 Node 未归属
+    assert (m.task_owner == -1).all(), "初始 Node 应未归属（-1）"
+    m.set_task(2)
+    m._append_node()
+    assert int(m.task_owner[-1]) == 2, "set_task(2) 后新 Node 应归属 task2"
+    m.set_task(5)
+    m._append_node()
+    assert int(m.task_owner[-1]) == 5, "set_task(5) 后新 Node 应归属 task5"
+
+
 def test_retention_curve_collection():
     """A→A / A→B→A / A→B→C→A' 逐段测 A 保留（模拟曲线采集的度量口径）。"""
     # 用 keep-A 精度作为 retained 度量（容忍任务序列里 A 只出现一次，用 A'=A2_add 近似）

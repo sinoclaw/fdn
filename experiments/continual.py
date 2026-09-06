@@ -39,17 +39,58 @@ def predict(model, x, dynamic=False):
         return res.numpy().reshape(-1), {}
 
 
-def evaluate_model(model, seq_name, seed):
-    """对每个任务生成评估集并测准确率 + 记录激活 Node。"""
+def evaluate_model(model, seq_name, seed, task_ids=None):
+    """对每个任务生成评估集并测准确率 + 记录激活 Node。
+    v0.4：若启用 task 约束，评估每任务前 set_task(任务 id)，保证用其专属 Node 组评估。
+    """
     accs = {}
     activations = {}
-    for tname in seq_name:
+    for i, tname in enumerate(seq_name):
         x, y = T.TASKS[tname](512, seed)
+        # v0.4：按当前任务 id 评估（若 task_ids 提供 pos 映射）
+        if hasattr(model, "set_task") and task_ids is not None:
+            model.set_task(task_ids[i])
         pred, info = predict(model, torch.from_numpy(x))
         accs[tname] = M.accuracy(pred, y, T.TOL)
         if "idx" in info:
             activations[tname] = sorted(set(info["idx"].reshape(-1).tolist()))
     return accs, activations
+
+
+def ensure_task_nodes(model, task_id, cfg, seed, optimizer=None):
+    """v0.4：保证任务 task_id 有专属 Node 组（强制不相交）。
+    任务 0：把初始未归属 Node（task_owner=-1）全部划归 task0（A 用足初始容量）。
+    后续任务：spawn init_per_task 个专属 Node（owner=当前任务）。
+    动态参数：optimizer 在 run_one 开头只含初始参数，spawn 后新 Node 参数须 add_param_group（保留旧 state）。
+    """
+    if not hasattr(model, "task_owner") or model.task_owner.numel() == 0:
+        return
+    existing = int((model.task_owner == task_id).sum().item())
+    want = cfg.get("init_per_task", cfg["init_nodes"])
+    if existing >= want:
+        return
+    # 任务 0：把未归属 Node（-1）划给 task0，补足到 want（初始 capacity 留给第一个任务）
+    if task_id == 0:
+        unowned = (model.task_owner == -1).nonzero().reshape(-1).tolist()
+        for ni in unowned:
+            model.task_owner[ni] = 0
+            model.n_owned += 1
+    # 补足专属 Node（spawn 时 model.current_task 已是 task_id，_append_node 会正确归属）
+    existing = int((model.task_owner == task_id).sum().item())
+    need = max(0, want - existing)
+    for _ in range(need):
+        model._append_node(parent_idx=None, noise=0.0)
+        if hasattr(model, "_grow_keys"):
+            model._grow_keys()
+    # 动态参数：新 Node 参数加入优化器（保留旧 param_group state）
+    if optimizer is not None and hasattr(model, "node_params_for_optim"):
+        for ni in range(model.node_count()):
+            if int(model.task_owner[ni]) == task_id:
+                params = model.node_params_for_optim(ni)
+                existing_params = {id(p) for g in optimizer.param_groups for p in g["params"]}
+                to_add = [p for p in params if id(p) not in existing_params]
+                if to_add:
+                    optimizer.add_param_group({"params": to_add})
 
 
 def train_task(model, x, y, optimizer, epochs, bs, dynamic, use_lifecycle=False):
@@ -102,7 +143,8 @@ def run_one(name, seq, cfg, seed):
                     plastic_lr=cfg["plastic_lr"], plastic_cap=cfg["plastic_cap"],
                     use_plasticity=cfg["use_plasticity"], use_memory=cfg["use_memory"],
                     dynamic_tau=cfg["dynamic_tau"], dynamic_k=cfg["dynamic_k"],
-                    warmup_steps=cfg.get("warmup_steps", 0), warm_temp=cfg.get("warm_temp", 3.0))
+                    warmup_steps=cfg.get("warmup_steps", 0), warm_temp=cfg.get("warm_temp", 3.0),
+                    task_constraint=cfg.get("task_constraint", False))
         dynamic, controller = True, EvolutionController(
             spawn_cos_thr=cfg["spawn_cos_thr"], prune_usage_thr=cfg["prune_usage_thr"],
             merge_cos_thr=cfg["merge_cos_thr"], young_tasks=cfg["young_tasks"],
@@ -118,6 +160,10 @@ def run_one(name, seq, cfg, seed):
 
     for pos, task in enumerate(seq):
         x, y = T.TASKS[task](cfg["n_train"], seed + pos * 977)
+        # v0.4：任务亲和约束 —— 任务边界注入当前任务 id，并为每个任务 spawn 专属 Node 组（强制不相交）
+        if dynamic and hasattr(model, "set_task"):
+            model.set_task(pos)          # 用任务内部序号 pos 作为 task_id（A=0,B=1,C=2,A'=3）
+            ensure_task_nodes(model, pos, cfg, seed, optimizer=opt)   # 若该任务无专属 Node 组则 spawn 一批
         # v0.3：per-node protected routing（在 forward 内生效）+ Competence Lock（use_lifecycle）
         train_task(model, x, y, opt, cfg["epochs_per_task"], cfg["bs"], dynamic,
                    use_lifecycle=cfg.get("use_lifecycle", False))
@@ -128,7 +174,8 @@ def run_one(name, seq, cfg, seed):
             rec["reactivation"][task] = model.reactivate_score(qq.mean(dim=0))
         if dynamic and controller is not None:
             controller.task_boundary(model, opt, x)   # 结构演化：任务边界触发（降频）
-        accs, act = evaluate_model(model, seq, seed + 1000 + pos)
+        accs, act = evaluate_model(model, seq, seed + 1000 + pos,
+                                   task_ids=list(range(len(seq))))
         timeline.append({"after": task, "acc": accs})
         all_activations[task] = set(act.get(task, []))
 
@@ -196,10 +243,10 @@ def main():
     ap.add_argument("--bs", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--run", default="all", choices=["all", "A", "B", "D", "C"])
-    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03"],
-                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation（per-node warm+competence lock+re-activation）")
-    ap.add_argument("--warm_epochs", type=int, default=0,
-                    help="v02c：per-task warm-up —— 每个任务前 N 个 epoch 用全班 soft 路由，之后切 hard top-k")
+    ap.add_argument("--profile", default="v0", choices=["v0", "v01", "v02", "v02b", "v02c", "v03", "v04"],
+                    help="v0=全动态；v01=StabilityPatch；v02=稳定结构+全动态；v02b=首任务warm；v02c=每任务warm；v03=Protected Expert Formation；v04=+任务亲和约束(per-task专属Node组强制不相交)")
+    ap.add_argument("--init_per_task", type=int, default=4,
+                    help="v04：每个任务 spawn 的专属 Node 数（强制不相交路由）")
     args = ap.parse_args()
 
     if args.seq == "retention":
@@ -252,6 +299,15 @@ def main():
                    spawn_cos_thr=0.5, merge_cos_thr=0.9, prune_usage_thr=0.01,
                    young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05,
                    warmup_steps=0, warm_temp=3.0, use_lifecycle=True)
+    elif args.profile == "v04":
+        # 团队 v0.4（本实验主体）：v0.3 + 任务亲和约束（强制不相交）
+        # 每个任务 spawn 专属 Node 组（task_owner=当前任务），路由只允许「本任务 Node + 未归属 Node」，
+        # 归属其他任务的 Node 被屏蔽（protected）→ A/B/C 各自独占 Node 组，实现真隔离。
+        cfg.update(use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
+                   spawn_cos_thr=0.5, merge_cos_thr=0.9, prune_usage_thr=0.01,
+                   young_tasks=2, freeze_tasks=2, merge_patience=2, merge_usage_thr=0.05,
+                   warmup_steps=0, warm_temp=3.0, use_lifecycle=True,
+                   task_constraint=True, init_per_task=args.init_per_task)
     cfg["profile"] = args.profile
 
     runs = ["A", "B", "D", "C"] if args.run == "all" else [args.run]

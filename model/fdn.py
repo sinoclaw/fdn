@@ -18,7 +18,7 @@ class FDN(nn.Module):
                  base_k=5, kmin=3, kmax=8, ent_scale=1.0,
                  memory_max=256, plastic_lr=1e-3, plastic_cap=0.1, plastic_decay=0.98,
                  use_plasticity=True, use_memory=True, dynamic_tau=True, dynamic_k=True,
-                 warmup_steps=0, warm_temp=3.0):
+                 warmup_steps=0, warm_temp=3.0, task_constraint=False):
         super().__init__()
         self.dim, self.hidden, self.r = dim, hidden, r
         self.base_k, self.kmin, self.kmax, self.ent_scale = base_k, kmin, kmax, ent_scale
@@ -53,6 +53,15 @@ class FDN(nn.Module):
         self.mature_epochs = 2        # 至少经过 N 个 epoch 才可能成熟
         self.competence_lr = 0.05     # competence 更新率
 
+        # —— FDN-v0.4：任务亲和约束（per-task 专属 Node 组，强制不相交）——
+        # 每个 Node 记录归属任务 task_owner（-1=未归属/通用）。当前任务查询只能路由到
+        # 「归属当前任务的 Node + 未归属 Node」，归属其他任务的成熟 Node 被屏蔽（protected）。
+        # 新任务 spawn 专属 Node 组（task_owner=当前任务）→ A/B/C 各自独占 Node 组，实现真隔离。
+        self.register_buffer("task_owner", torch.full((0,), -1, dtype=torch.long))  # (n,) 每 Node 归属任务
+        self.current_task = -1        # 当前训练/评估任务 id（由 set_task 注入）
+        self.task_constraint = task_constraint   # v0.4 开关：启用强制不相交路由（由 cfg 传入）
+        self.n_owned = 0              # 已归属任务的 Node 数（用于隔离检查）
+
         for _ in range(initial_nodes):
             self._append_node()
 
@@ -80,6 +89,11 @@ class FDN(nn.Module):
         self.maturity = torch.cat([self.maturity, torch.zeros(1)], dim=0)
         self.competence = torch.cat([self.competence, torch.zeros(1)], dim=0)
         self.node_epoch = torch.cat([self.node_epoch, torch.zeros(1, dtype=torch.long)], dim=0)
+        # v0.4：新 Node 归属当前任务（-1=未归属/通用，由 run_one 在任务边界 spawn 时设 current_task）
+        owner = torch.tensor([self.current_task], dtype=torch.long)
+        self.task_owner = torch.cat([self.task_owner, owner], dim=0)
+        if self.current_task >= 0:
+            self.n_owned += 1
         return len(self.nodes) - 1
 
     def _grow_keys(self):
@@ -109,14 +123,26 @@ class FDN(nn.Module):
             arch_idx = list(self.archived)
             scores[:, arch_idx] = -1e9
 
+        # —— v0.4：任务亲和约束（强制不相交）——
+        # 屏蔽归属其他任务的 Node（当前任务 protected 它们），只允许「本任务 Node + 未归属 Node」进入 top-k。
+        tm = self._task_mask()
+        if tm is not None:
+            scores = scores.clone()
+            scores[:, ~tm] = -1e9
+            # 可路由 Node 数受 task mask 限制：k 不得超过「与当前任务亲和可用的 Node 数」
+            allow_count = int(tm.sum().item())
+
         # —— FDN-v0.3：Protected Expert Routing ——
         # 不再做「全班 soft」（v0.2-C 错在让所有 Node 共享梯度）。改做 per-node 保护：
         #   * 未成熟 Node（maturity<thr）-> "warm"：在 top-k 内对其 gate 做 soft 放大（高门控、独立吸收梯度）
         #   * 成熟 Node -> protected：标准 hard gate（top-k softmax），不受后续任务拉宽
-        k = self._dynamic_k(x, scores) if self.dynamic_k else self.base_k
-        top = torch.topk(scores, min(k, scores.size(-1)), dim=-1)      # (B,k)
-        idx = top.indices                                              # (B,k)
-        gate = torch.softmax(top.values, dim=-1)                       # (B,k)
+        k = self.base_k if not self.dynamic_k else self._dynamic_k(x, scores)  # 但 scores 可能含 -1e9（task mask/archived）
+        if tm is not None:
+            k = min(k, allow_count)
+        k = max(1, min(k, scores.size(-1)))   # 防御：k 至少为 1、不超 Node 数
+        top = torch.topk(scores, k, dim=-1)                                # (B,k)
+        idx = top.indices                                                  # (B,k)
+        gate = torch.softmax(top.values, dim=-1)                           # (B,k)
 
         # per-node warm 掩码（训练时生效）：未成熟 Node 的门控放大 alpha
         if self.training and hasattr(self, "maturity") and self.maturity.numel() > 0:
@@ -169,6 +195,21 @@ class FDN(nn.Module):
 
     def reset_step(self):
         self.step = 0
+
+    # —— FDN-v0.4：任务亲和约束 ——
+    def set_task(self, task_id):
+        """由 run_one/评估在任务边界注入当前任务 id。路由只允许「归属该任务的 Node + 未归属 Node」。"""
+        self.current_task = int(task_id)
+
+    def _task_mask(self):
+        """v0.4 隔离 mask：(n,) 逻辑值，True=允许当前任务路由。
+        允许：归属 current_task 的 Node + 未归属 Node（task_owner=-1）。
+        屏蔽：归属其他任务的 Node（被当前任务 protected）。
+        """
+        if not self.task_constraint or self.current_task < 0 or self.task_owner.numel() == 0:
+            return None   # 未启用约束 → 不屏蔽
+        allow = (self.task_owner == self.current_task) | (self.task_owner == -1)
+        return allow
 
     # —— FDN-v0.3：Competence Lock（B）+ Re-activation（C）——
     def update_lifecycle(self, loss, entropy):

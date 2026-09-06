@@ -105,6 +105,26 @@ results/        原始实验 JSON
 
 > 详表见 `results/V02_REPORT.md`、`docs/GPT_AUDIT_V02.md`；原始数据 `summary_v02a/b/c.json`。
 
-## 结果（v0.3 Protected Expert Formation，见 results/V03_REPORT.md）
+## 结果（v0.3 Protected Expert Formation，2026-09-06）
 
-（待实验完成填表）+ per-node warm（未成熟 Node 高门控吸梯度）→ Competence Lock（maturity 升，成熟 Node 可塑衰减）→ Re-activation（Router 复用成熟 A-Node）。
+**A 遗忘彻底解决 + B 首次学会，方向正确。** 见 `results/V03_REPORT.md`。
+| 指标 | v0.2-B | v0.2-C | v0.3 保护式 |
+|---|---|---|---|
+| acc_A_end | 0.455 | 0.053 | **0.285** |
+| forgetting_A | 0.0 | 0.845 | **0.0** |
+| B_mul | 0.020 | 0.029 | **0.051** |
+| C_logic | 0.176 | 0.033 | 0.041 |
+> 原始数据 `summary_v03.json`；GPT 复审见 `docs/GPT_AUDIT_V02.md`。
+
+## 结果（v0.4 任务亲和约束 Hard-Isolation，2026-09-06）——重要反证
+
+**硬隔离（强制不相交）违背 FDN 核心假说——它切断了同分布任务（A/A'）的 Node 复用。** 见 `results/V04_REPORT.md`。
+| 指标 | v0.3 保护式 | v0.4 硬隔离 |
+|---|---|---|
+| acc_A_end | 0.285 | **0.023** |
+| forgetting_A | 0.0 | **0.5** |
+| node_overlap_A_A2 | 0.667 | **0.0** |
+| final_nodes | 13 | 37（prune 29） |
+
+**结论**：任务亲和约束应为**软偏好**（鼓励不同任务偏向不同 Node 组，允许复用已演化亲和），硬性不相交是错误路径 → v0.4-lite（软 task bias）方向。
+> 原始数据 `summary_v04.json`；反证细节见 `results/V04_REPORT.md`、`results/EXPERIMENT_LOG.md`。

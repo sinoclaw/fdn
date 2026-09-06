@@ -204,4 +204,27 @@ GPT 复审（docs/GPT_AUDIT_V02.md）判断：soft routing 本身不是解（v0.
 - ⚠️ **C_logic 仍低（0.041）**，B/C 与 A 的 reactivation 命中 Node 重叠大 —— **B/C 尚未形成独立 Node 组**。
 - **结论**：v0.3 方向正确（A 遗忘=0），但要做到「A/B/C 各形成独立 Node」的『动态模块形成机制』，需更强的**任务亲和约束**（强制任务映射到不相交 Node 组），即 v0.4 方向。**待 GPT 裁量。**
 
+## 2026-09-06 FDN-v0.4 任务亲和约束（硬隔离）—— 反证：硬隔离违背 FDN 核心假说
+
+v0.3 后拍板方向：用「强制任务映射不相交 Node 组」解决 B/C 未独立。据此实现 v0.4：task_owner 归属 + _task_mask 硬屏蔽其他任务 Node + ensure_task_nodes（任务0划归初始Node、后续任务spawn专属Node+add_param_group动态参数）。
+
+命令：`.venv/bin/python experiments/continual.py --seq core --seed 0 --n_train 1200 --epochs_per_task 40 --run C --profile v04 --init_per_task 8 --out results/summary_v04.json`
+
+### v0.4 结果（C，seed0，40ep，init_per_task 8）
+| 指标 | v0.3 保护式 | v0.4 硬隔离 |
+|---|---|---|
+| acc_A_end | 0.285 | **0.023** |
+| forgetting_A | 0.0 | **0.5** |
+| node_overlap_A_A2 | 0.667 | **0.0** |
+| B_mul | 0.051 | 0.031 |
+| C_logic | 0.041 | 0.004 |
+| final_nodes | 13 | 37（prune 29） |
+
+**v0.4 判定（重要反证）**：
+- ❌ **硬隔离破坏 FDN 核心**：`node_overlap_A_A2=0.0` —— A 与 A'(task3) 的 Node 完全不相交，违背「A' 调用 A 的 Node」这一 FDN 假说根本（v0 已证 IoU=1.0）。硬隔离把 A' 切到 task3 专属 Node → 无法"长出并调用"。
+- ❌ **A 遗忘回归（0.5）**、A 未学会（0.023）：隔离切断了同分布任务的容量共享（A/A' 本应共享）。
+- ❌ **prune 29 次**：spawn 大量用不上的专属 Node。
+- **结论**：任务亲和约束应为**软偏好**（鼓励不同任务偏向不同 Node 组、允许复用已演化亲和），**硬性不相交是错误路径**。v0.3 的「软保护 + 新模块 warm」方向仍最优。
+- **下一步**：v0.4-lite（软 task bias，q=W_q·x+task_bias[task]，不硬屏蔽）+ 交 GPT 审计裁定。
+
 
