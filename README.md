@@ -182,3 +182,17 @@ results/        原始实验 JSON
 
 **核心**：**同一个 A 任务，共享 MLP 完美学会（1.0），但任何"多 node 路由 + 独立计算"的 MoE 结构（无论 hard/soft 路由、固定/动态、有无外围机制）都学不会（0.05-0.09）。** 最底层根因是 **MoE 拓扑路由架构对"全局简单/无任务子结构"函数无法梯度分配**——并非路由不可导/结构震荡/动态缺失，而是 MoE 架构本身与 toy 回归任务不适配。**FDN 系列（v0→v0.7）经 8 个 commit、两个反证，收口为"架构层不适配"结论，建议交 GPT 四审裁量终结/转向。**
 > 报告 `V07_FINAL.md`；反证探针 `/tmp/probe_baseline.py`、`/tmp/probe_router.py`。
+
+## 结果（最终判定，2026-09-06）——条件任务下 MoE 仍不分化，FDN 正式封存
+
+**GPT 四审钦定最后实验**（条件任务 z=0→add, z=1→mul）：即使给了天然子结构，StaticMoE 仍学不会（acc 0.02-0.12）、Router 仍不分化（IoU 0.6-1.0）。见 `results/EXPERIMENT_LOG.md`。
+
+| 模型 | 条件任务 acc | z=0 vs z=1 node IoU |
+|---|---|---|
+| StaticMLP（共享） | **1.000** | — |
+| StaticMoE n=12 k=3 | 0.051 | 0.667 |
+| StaticMoE n=24 k=5 | 0.115 | 0.857 |
+| StaticMoE n=12 k=8 | 0.090 | **1.000**（不分化） |
+
+**FDN 正式 No-Go 封存**（按 GPT 四审判定路径）。终极结论：**"多独立 Node + Router 稀疏路由"的 MoE 拓扑在 toy 回归体系下学不会，无论任务有无子结构**——共享网络（StaticMLP）始终最优。**与 GSLM No-Go 同源**："动态结构 ≠ 动态智能；若动态结构只是 MoE 专家路由，它只是强行拆碎共享函数"（GPT 金句）。转 State-Space / Dynamic-State / Self-Modifying Network 方向。保留全部实验与工具链（DynamicNode/telemetry/freeze/continual-learning/router audit）为 No-Go Architecture Study。
+> 探针 `/tmp/probe_cond.py`。

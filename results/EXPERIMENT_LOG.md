@@ -382,6 +382,29 @@ GPT 三审裁定：v0.6 未实现 Node autonomous specialization，根因是"A �
 
 > 产物：`/tmp/probe_baseline.py`、`/tmp/probe_v07*.json`、`/tmp/diag_soft.py`（临时）。
 
+## 2026-09-06 FDN 最终判定实验（GPT 四审钦定）：条件任务下 MoE 仍不分化 → FDN 正式封存
+
+GPT 四审建议的**最后决定性实验**（docs/GPT_AUDIT_V07.md）：拿 StaticMoE 换**天然存在子结构的条件任务**（z=0→add, z=1→mul），若 StaticMoE 学会 + Router 分化（z=0→Node A, z=1→Node B）则证明"不是 MoE 不行，是 FDN 任务没给模块化留空间"；若失败则 **FDN 项目正式封存**。
+
+### 实验结果（/tmp/probe_cond.py，GEN_COND 条件任务单任务）
+| 模型 | 单任务 acc | z=0 vs z=1 node IoU 重叠 |
+|---|---|---|
+| StaticMLP h=32/64（共享网络） | **1.000** | — |
+| StaticMoE n=12 k=3 | 0.051 | 0.667 |
+| StaticMoE n=12 k=5 | 0.031 | 0.625 |
+| StaticMoE n=24 k=5 | 0.115 | 0.857 |
+| StaticMoE n=12 k=8 | 0.090 | **1.000**（完全不分化） |
+| StaticMoE n=16 k=4 | 0.023 | 0.875 |
+
+### 核心结论（最终判定）
+**即使给了"天然子结构"的条件任务（z=0→add / z=1→mul 有明确的阶层分工），StaticMoE 依然学不会（acc 0.02-0.12）、Router 依然不分化（IoU 0.6-1.0，z=0/z=1 用几乎同一批 node）。**
+
+这**反证了 GPT 四审的假设**（"不是 MoE 不行，是 FDN 任务没给模块化留空间"）——给了真子结构，MoE 还是不行。StaticMLP 始终 1.0（共享网络最优）。
+
+按 GPT 四审预定的判定路径（"若 StaticMoE 条件任务也失败 → FDN 项目正式封存"），**FDN 正式进入 No-Go 封存**。根本结论进一步证实：**"多独立 Node + Router 稀疏路由"的 MoE 拓扑在 toy 回归体系下就是学不会，无论任务有无子结构**——共享网络（StaticMLP）始终最优。这与 GSLM No-Go 共同指向：**"动态结构 ≠ 动态智能；若动态结构只是 MoE 专家路由，它只是强行拆碎共享函数"**（GPT 金句）。
+
+> 产物：`/tmp/probe_cond.py`（临时）。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
