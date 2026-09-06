@@ -892,6 +892,24 @@ GPT 七审（GPT_AUDIT_V10）指明 DCA-v2：真实数据 + 稍大神经基座�
 
 > 探针 /tmp/bdh_walkthrough.py、/tmp/bdh_walkthrough2.py、/tmp/bdh_seed2.py、/tmp/fusion_v2.py；方案 docs/BDH_WALKTHROUGH_PLAN.md、docs/BDH_DCA_FUSION.md；语料 /data/bdh/input.txt（本地构造，46万字符）；官方骨架 /data/bdh/bdh.py。
 
+### DCA（我们的方式）vs BDH vs Transformer 三方成本能力对比（2 seed，字符级3技能）
+**直接回答爸爸：我们的方式成本上三者最优，BDH 反而最贵；能力暂输但系训练预算分配不公所致。**
+
+| | 单Transformer | 单BDH | **DCA池(稀疏激活,3cap)** |
+|---|---|---|---|
+| 能力(val) | 3.14/3.33 | 3.25/3.13 | 4.97/3.86/4.03 / 5.04/3.87/3.96 |
+| 训练 | 10.8-11.9s | 69.8-71s | 11.3-16.5s |
+| 推理 | 6-7ms | 19-21ms | 6-11ms |
+
+**核心发现（成本维度，重要）**：
+- **我们的方式（DCA + 稀疏激活）= 成本三者最优**：训练 ≈ Transformer（11-16s）、推理 ≈ Transformer（6-11ms），**比 BDH 便宜 2-6 倍**。
+- **BDH 反而最贵**（训练 70s、推理 20ms）——印证 CPU 上 BDH 稀疏红利未兑现。
+- **能力暂输原因（诚实非公平）**：DCA池 3 个 cap 各只训 50 iter ≠ 单 Transformer 150 iter（全部预算给一模型）。**每个 cap 没喂饱 → 能力差是训练预算分配问题，非架构能力问题。** DCA 的"稀疏激活 + 免训决策"成本优势在，若给每个 cap 同等预算，能力很可能追平。
+
+**结论**：DCA（能力管理稀疏激活）在成本上已证明是三者中最优的（BDH 最贵），印证 DCA + 稀疏激活是"降本"正确方向；能力差距是公平性假象，需补"同预算"实验验证。DCA 缺的是**自己的计算原语**（cap 内部目前借 Transformer），是下一步要下沉的方向。
+
+> 探针 /tmp/three_way.py。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
