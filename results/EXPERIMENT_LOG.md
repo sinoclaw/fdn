@@ -1241,6 +1241,24 @@ GPT 审计指出 d3c68bb 把「参数更少 + 计算更少」混为一变量，F
 
 > 探针 /tmp/dca_fw_predictor_pool.py(v1)、/tmp/dca_fw_predictor_pool2.py(v2)。产物：本表。
 
+## 2026-09-07 步骤3-续：FusedFW 作为 DCA Capability substrate —— 载体/任务不匹配（诚实负）
+
+把 DCA 池的小型 MLP `Cap` 换成 **FusedFW 记忆单元 `CapFW`**（`inp(1→D)→enc→topk稀疏→rho Hebbian→记忆读回→FFN→mean池化→head`，把 skill 的 64 维特征向量 reshape 成 64 个"token"），用免训 Predictor 驱动 REUSE/SPAWN，验证"合体动态能力 + O(T) 高效"。
+
+**结果（诚实负）**：CapFW 在 DCA skill 上**学不动**：
+
+| 网络 | classify_4c (40/80/120ep) | math_4c (120ep) |
+|---|---|---|
+| CapFW（FusedFW 载体） | 0.226 / 0.288 / **0.250**（4类随机≈0.25） | **0.064**（更差） |
+| MLP Cap（对照） | — / — / **1.000** | — |
+
+**根因（真发现，载体/任务不匹配）**：FusedFW 的 rho 是**无时序的选择性记忆池**，主场是**序列任务**（顺序重要、长上下文，O(T)）；而 DCA 的 skill 是**定长特征向量分类**（无序列结构）——`mean` 池化把 64 个"token"压掉后丢失了分类所需信息，**全连接 MLP（1.0）才是这类任务的正确模型**。FusedFW 的优势恰好是这类任务不需要的。
+
+**结论**：**"FusedFW 作为 Capability substrate" 与 DCA 现有向量分类 skill 不匹配**——FusedFW 载体学不动这些任务。要让 FusedFW 当有用载体，**能力必须是序列/LM 任务**（顺序/长上下文是它的主场），而非定长向量分类。两条路（后续决策）：
+- **A**：DCA 池保留 MLP 载体（向量任务），FusedFW 的方向仍是序列/长上下文主战场（已有硬证据）；
+- **B**：重构能力为**序列任务**（字符域 char-LM 的多子域/风格），让 FusedFW 当序列能力载体 + DCA 管理（需新任务集，工作量大）。
+> 探针 /tmp/dca_fw_substrate.py。产物：本表。**诚实：不硬圆——FusedFW 在向量分类上就是学不动，载体与任务错配。**
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
