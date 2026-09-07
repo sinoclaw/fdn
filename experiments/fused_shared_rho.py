@@ -128,8 +128,11 @@ class TF(nn.Module):
         return lg,loss
     def np(self): return sum(p.numel() for p in self.parameters())
 
-def run(m,iters=250,bl=256,bt=16,lr=3e-4,seed=0):
-    data=load_data(); rng=np.random.RandomState(seed); torch.manual_seed(seed); np.random.seed(seed)
+def run(factory,iters=250,bl=256,bt=16,lr=3e-4,seed=0):
+    # P0 fix(GPT审计 2026-09-07): 必须先设 seed 再创建模型，否则模型随机初始化不受 seed 控制
+    rng=np.random.RandomState(seed); torch.manual_seed(seed); np.random.seed(seed)
+    data=load_data()
+    m=factory()
     opt=torch.optim.AdamW(m.parameters(),lr=lr)
     t0=time.time()
     sp=0.0
@@ -160,8 +163,8 @@ if __name__=='__main__':
         print(f" {name:<22} val={np.mean(vals):.3f} 训练={np.mean(trs):.1f}s 推理={np.mean(ins)*1000:.0f}ms 参数={np_:,} 稀疏={np.mean(sps):.1%}")
         return np.mean(vals),np.mean(trs)
     print("=== 方向B：共享稀疏latent + rho层间传递 vs 每层独立投影 vs TF（同数据+同预算，3seed）===")
-    report("TF(2层D=128)",lambda sd: run(TF(D=128,n_layer=2),seed=sd))
-    report("FusedDeep nl=2",lambda sd: run(FusedDeep(D=128,N=512,k=16,n_layer=2),seed=sd))
-    report("FusedDeep nl=4",lambda sd: run(FusedDeep(D=128,N=512,k=16,n_layer=4),seed=sd))
+    report("TF(2层D=128)",lambda sd: run(lambda: TF(D=128,n_layer=2),seed=sd))
+    report("FusedDeep nl=2",lambda sd: run(lambda: FusedDeep(D=128,N=512,k=16,n_layer=2),seed=sd))
+    report("FusedDeep nl=4",lambda sd: run(lambda: FusedDeep(D=128,N=512,k=16,n_layer=4),seed=sd))
     for np_ in [2,4,8]:
-        report(f"SharedRho pass={np_}",lambda sd,np_=np_: run(FusedSharedRho(D=128,N=512,k=16,n_pass=np_),seed=sd))
+        report(f"SharedRho pass={np_}",lambda sd,np_=np_: run(lambda: FusedSharedRho(D=128,N=512,k=16,n_pass=np_),seed=sd))

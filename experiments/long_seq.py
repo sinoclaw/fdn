@@ -75,7 +75,8 @@ if __name__=='__main__':
         for name,mk in [("TF",lambda: TFLong(D=128,n_layer=2)),("FW+FFN",lambda: FusedFW(D=156,N=4*156,k=16,use_ffn=True))]:
             try:
                 # 用 run 但改 block/seq：run 里 bl 默认256，这里临时用定制训练
-                m=mk(); data=load_data(); rng=np.random.RandomState(0); torch.manual_seed(0); np.random.seed(0)
+                data=load_data(); rng=np.random.RandomState(0); torch.manual_seed(0); np.random.seed(0)
+                m=mk()
                 opt=torch.optim.AdamW(m.parameters(),lr=3e-4)
                 for _ in range(80):
                     m.train(); x,y=get_batch(data,T,8,rng); _,loss=m(x,y); opt.zero_grad(); loss.backward(); opt.step()

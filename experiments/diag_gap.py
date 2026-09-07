@@ -78,8 +78,11 @@ class TF(nn.Module):
         return lg,loss
     def np(self): return sum(p.numel() for p in self.parameters())
 
-def run(m,iters=250,bl=256,bt=16,lr=3e-4,seed=0):
-    data=load_data(); rng=np.random.RandomState(seed); torch.manual_seed(seed); np.random.seed(seed)
+def run(factory,iters=250,bl=256,bt=16,lr=3e-4,seed=0):
+    # P0 fix(GPT审计 2026-09-07): 必须先设 seed 再创建模型，否则模型随机初始化不受 seed 控制
+    rng=np.random.RandomState(seed); torch.manual_seed(seed); np.random.seed(seed)
+    data=load_data()
+    m=factory()
     opt=torch.optim.AdamW(m.parameters(),lr=lr)
     t0=time.time(); trl=[]
     for _ in range(iters):
@@ -103,11 +106,11 @@ if __name__=='__main__':
         print(f" {name:<24} val={np.mean(vs):.3f} 训末loss={np.mean(trls):.3f} 训练={np.mean(tr):.1f}s 推理={np.mean(ti)*1000:.0f}ms 参数={np_:,}")
         return np.mean(vs)
     print("=== 能力差距诊断：FusedFW vs 加容量消融 vs TF（同数据+同预算250iter+3seed）===")
-    r_tf=report("TF 2层(D=128)",lambda sd: run(TF(D=128,n_layer=2),seed=sd))
-    r_fw=report("FusedFW 1层(现状)",lambda sd: run(FusedFW(D=128,N=512,k=16),seed=sd))
-    r_ffn=report("FusedFW 1层+FFN",lambda sd: run(FusedFW(D=128,N=512,k=16,use_ffn=True),seed=sd))
-    r_2l=report("FusedFW 2层(独立)",lambda sd: run(FusedFW(D=128,N=512,k=16,n_layer=2),seed=sd))
-    r_wide=report("FusedFW 1层 N=1024",lambda sd: run(FusedFW(D=128,N=1024,k=16),seed=sd))
+    r_tf=report("TF 2层(D=128)",lambda sd: run(lambda: TF(D=128,n_layer=2),seed=sd))
+    r_fw=report("FusedFW 1层(现状)",lambda sd: run(lambda: FusedFW(D=128,N=512,k=16),seed=sd))
+    r_ffn=report("FusedFW 1层+FFN",lambda sd: run(lambda: FusedFW(D=128,N=512,k=16,use_ffn=True),seed=sd))
+    r_2l=report("FusedFW 2层(独立)",lambda sd: run(lambda: FusedFW(D=128,N=512,k=16,n_layer=2),seed=sd))
+    r_wide=report("FusedFW 1层 N=1024",lambda sd: run(lambda: FusedFW(D=128,N=1024,k=16),seed=sd))
     print("\n=== 能力差距（相对 TF）===")
     for nm,v in [("FusedFW 1层",r_fw),("+FFN",r_ffn),("2层",r_2l),("N=1024",r_wide)]:
         print(f"  {nm:<16} 差={v-r_tf:+.3f}")

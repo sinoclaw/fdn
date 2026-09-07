@@ -41,7 +41,7 @@ def flops_fw(D,N,T=256,vocab=256):
 def report(name, mk, flops_fn, P, D):
     m=mk(D); vals=[];tr=[];ti=[];params=m.np()
     for sd in SEEDS:
-        vl,trl,tt,it,np_=run(mk(D),seed=sd); vals.append(vl);tr.append(tt);ti.append(it)
+        vl,trl,tt,it,np_=run(lambda: mk(D),seed=sd); vals.append(vl);tr.append(tt);ti.append(it)
     fl=flops_fn(D)
     return dict(name=name,P=int(P),D=int(D),params=int(params),val=float(np.mean(vals)),
                 val_std=float(np.std(vals)),train=float(np.mean(tr)),infer=float(np.mean(it)),

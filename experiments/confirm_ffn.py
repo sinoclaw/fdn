@@ -19,7 +19,7 @@ SEEDS=[0,1,2,3,4]
 def report(name, mk):
     vs=[];tr=[];ti=[];trls=[]
     for sd in SEEDS:
-        vl,trl,tt,it,np_=run(mk(),seed=sd); vs.append(vl);tr.append(tt);ti.append(it);trls.append(trl)
+        vl,trl,tt,it,np_=run(mk,seed=sd); vs.append(vl);tr.append(tt);ti.append(it);trls.append(trl)
     print(f" {name:<22} val={np.mean(vs):.3f}±{np.std(vs):.3f} 训末loss={np.mean(trls):.3f} "
           f"训练={np.mean(tr):.1f}s 推理={np.mean(ti)*1000:.0f}ms 参数={np_:,}")
     return np.mean(vs), np.std(vs)

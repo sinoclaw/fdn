@@ -15,7 +15,9 @@ ITERS=120
 BATCH=8
 
 def run_at(mk, T, seed, iters=ITERS, bt=BATCH):
-    m=mk(); data=load_data(); rng=np.random.RandomState(seed); torch.manual_seed(seed); np.random.seed(seed)
+    # P0 fix(GPT审计 2026-09-07): 先设 seed 再建模型
+    data=load_data(); rng=np.random.RandomState(seed); torch.manual_seed(seed); np.random.seed(seed)
+    m=mk()
     opt=torch.optim.AdamW(m.parameters(),lr=3e-4)
     for _ in range(iters):
         m.train(); x,y=get_batch(data,T,bt,rng); _,loss=m(x,y); opt.zero_grad(); loss.backward(); opt.step()
