@@ -1242,6 +1242,8 @@ GPT 审计指出 d3c68bb 把「参数更少 + 计算更少」混为一变量，F
 - ✅ PredictorDynPool **能正确隔离 classify/extract/math 且不遗忘**（核心"接 DCA 免训 Predictor"机制成立）。
 - ❌ **遗留局限**：transform vs math 边界分辨失败（predictor 预测 transform 对 math cap 损伤 0.244 < 阈值 0.3，把异族也复用）→ 该族局部退化。属**边界分辨中的真实局限**（跨族特征可分性/阈值），非"DCA 免训方向不可行"。
 - **对账**：v2 整体"3/5 决策正确 + 隔离族不遗忘"，证明免训 Predictor 能替代真 probe 做能力边界管理，但跨族边界分辨率需更强 task_rep 或阈值校准（后续方向）。
+>
+> **GPT 审计 V12 诚实注记（docs/GPT_AUDIT_V12.md）**：①**train/test 非完全独立**——split 是「每种 (cap_family,new_family) pair 内抽 30% 做 test」，非"整 pair 留出"；只能证"**已见 family-pair 内新 variant 有泛化**"，不能证"**未知 family/family-pair 也泛化**"（predictor 或只学到 classify↔classify 等 family-level shortcut）。②**threshold 有人为调优**——部署固定 `thr=0.3`，但对账时扫 0~0.59 找最佳阈值才报 consistency=0.812；应分开报 `fixed=0.3` 与 `best=X`。③**capability 训练协议变了**（REUSE 用 2000/Adam/lr1e-3/30ep/b64，非标准 train_cap）——须与构建 damage 数据的真 probe 协议严格一致，否则部署漂移（🟡 续审）。④**"training-free" 实为 "training-free at runtime"**——predictor 本身需离线数据生成+probe 训练。**主线优先级**：审计明确此线为 DCA 辅助机制，**主线应继续走 FAIR_BENCH_V2 真实模型蒸馏 benchmark**。
 
 > 探针 /tmp/dca_fw_predictor_pool.py(v1)、/tmp/dca_fw_predictor_pool2.py(v2)。产物：本表。
 
