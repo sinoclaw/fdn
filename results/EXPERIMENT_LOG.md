@@ -1220,6 +1220,27 @@ GPT 审计指出 d3c68bb 把「参数更少 + 计算更少」混为一变量，F
 
 > 探针 /tmp/long_seq_ability.py。产物：本表。
 
+## 2026-09-07 步骤3：接 DCA 免训 Interference Predictor 进动态能力池（部分通过，诚实记录）
+
+目标：把 DCA 池 `DynPool.consider()` 的"真 probe（深拷贝+训练）"换成语义任务上**训练好的免训 Predictor**（`[task_rep; cap_state]` → 预测 damage → REUSE/SPAWN，运行时零训练），即"接 DCA 免训 Predictor 走向动态能力"。
+
+**v1（用 ip2 小数据集，5技能/16行）→ 负**：predictor 严重过拟合（训练 Sp=1.0 → 留出 Sp=-0.29），池决策全错（把异族也 REUSE 进同一 cap）→ 灾难性遗忘（cap#1 上 extract acc 0.002）。**根因**：predictor 要在"留出未见 (cap,family) 对"上泛化，需要 **ip3 那种每族多变体、类别平衡的数据集**；小数据集只有 1 个同族对 → 学不出泛化的 REUSE/SPAWN 模式。
+
+**v2（用 ip3 平衡多变体数据集，48行）→ 部分通过**：
+| 项 | 结果 |
+|---|---|
+| predictor 泛化（留出） | Sp=0.898 / 一致 0.812 / F1=0.857（远超判据 0.7/0.8/0.8）✅ |
+| 池决策（两seed一致） | classify_v1→REUSE，extract_v0→SPAWN，math_v0→SPAWN 全对 ✅；transform_v0→REUSE 到 math cap ✗ |
+| 能力不遗忘 | 隔离对的 classify cap(0.96-0.99)/extract cap(0.98) **不遗忘** ✅；被错复用的 math+transform cap 退化到 0.50-0.52 ✗ |
+
+**结论（诚实，部分通过）**：
+- ✅ 免训 Predictor 在**平衡数据集**上能泛化（v1 失败是数据集未平衡的产物，非概念失败）。
+- ✅ PredictorDynPool **能正确隔离 classify/extract/math 且不遗忘**（核心"接 DCA 免训 Predictor"机制成立）。
+- ❌ **遗留局限**：transform vs math 边界分辨失败（predictor 预测 transform 对 math cap 损伤 0.244 < 阈值 0.3，把异族也复用）→ 该族局部退化。属**边界分辨中的真实局限**（跨族特征可分性/阈值），非"DCA 免训方向不可行"。
+- **对账**：v2 整体"3/5 决策正确 + 隔离族不遗忘"，证明免训 Predictor 能替代真 probe 做能力边界管理，但跨族边界分辨率需更强 task_rep 或阈值校准（后续方向）。
+
+> 探针 /tmp/dca_fw_predictor_pool.py(v1)、/tmp/dca_fw_predictor_pool2.py(v2)。产物：本表。
+
 ## 2026-09-06 FDN-v0.7 根因反证 #2：路由可导性 NOT 根因（颠覆性）
 
 在 StaticMoE 上做「一次只动路由方式」对照（单任务 A，n=12，k=5，30ep，/tmp/probe_router.py）：
